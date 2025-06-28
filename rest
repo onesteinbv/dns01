@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+
+declare -A conf
+conf[api]='https://api.openprovider.eu/v1beta'
+conf[auth_ep]='auth/login'
+conf[auth_req]='username=%s password=%s ip=0.0.0.0'
+conf[auth_tok]='.data.token'
+conf[auth_var]='OPENPROVIDER_AUTH'
+
+enc() {
+  local f="$1"
+  shift
+
+  case $f in
+    json) printf "%s\n" "$@" | jq -Rn 'reduce inputs as $i ({}; . + {($i | split("=")[0]): ($i | split("=")[1])})'  ;;
+     uri) { for p in "$@"; do echo "${p%%=*}=$(echo -n "${p#*=}" | jq -sRr @uri)"; done; } | paste -sd '&'          ;;
+  esac
+}
+
+req() {
+  local cmd=('curl' '-sSL') endpoint="$1" verb="${FUNCNAME[1]}" client="${FUNCNAME[2]}"
+  shift
+
+  [[ $client != 'auth' ]] && {
+    [[ -v "${conf[auth_var]}" ]] || auth
+    cmd+=('-H' "Authorization: Bearer ${!conf[auth_var]}")
+  }
+
+  (( $# )) && case $verb in
+    post|put|patch) cmd+=('-H' 'Content-Type: application/json' '-d' "$(enc json $@)")  ;;
+        get|delete) endpoint+="?$(enc uri "$@")"                                        ;;
+  esac
+
+  "${cmd[@]}" -X "${verb^^}" "${conf[api]}/$endpoint"
+}
+
+auth() {
+  local user pass
+  read -p  "username: " user
+  read -sp "password: " pass
+
+  declare -gx "${conf[auth_var]}"="$(post "${conf[auth_ep]}" "$(printf "${conf[auth_req]}" "$user" "$pass")" | jq -r "${conf[auth_tok]}")"
+}
+
+go() {
+  local verb cmd="$1"
+
+  for verb in post get put delete patch; do
+    IFS= read -rd '' verb <<VERB
+ ${verb}() { req "\$@"; }
+${verb}j() { $verb "\$@" | jq; }
+VERB
+    eval "$verb"
+    [[ $(type -t "${cmd}" 2> /dev/null) == 'function' ]] && { "$@"; break; }
+  done
+}
+
+go "$@"
+[[ "${BASH_SOURCE[0]}" != "$0" ]] && unset conf enc req auth go post get put delete patch postj getj putj deletej patchj
