@@ -87,9 +87,13 @@ go() {
 ${verb}j() { $verb "\$@" | jq; }
 VERB
     eval "$verb"
-    [[ $(type -t "${cmd}" 2> /dev/null) == 'function' ]] && { "$@"; break; }
   done
+
+  [[ $(type -t "${cmd}" 2> /dev/null) == 'function' ]] && "$@"
 }
 
+
 go "$@"
+
+# TODO: improve env save/restore when being sourced
 [[ "${BASH_SOURCE[0]}" != "$0" ]] && unset conf enc req auth go post get put delete patch postj getj putj deletej patchj
