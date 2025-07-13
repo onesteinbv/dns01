@@ -7,19 +7,18 @@ conf[auth_req]='username=%s password=%s ip=0.0.0.0'
 conf[auth_tok]='.data.token'
 conf[auth_var]='OPENPROVIDER_AUTH'
 
-split_top_commas() {
-  local s="$1" buf='' depth=0 out=()
-  for ((i=0;i<${#s};i++)); do
+comma_items() {
+  local s="$1" depth=0 item=
+  for (( i=1; i < ${#s} - 1; i++)); do
     c=${s:i:1}
     case $c in
-      '['|'{' ) ((depth++)) ;;
-      ']'|'}' ) ((depth--)) ;;
-      ',' ) (( depth )) || { out+=("$buf"); buf=''; continue; } ;;
+      [\[{]) (( depth++ )) ;;
+      [\]}]) (( depth-- )) ;;
+          ,) (( depth )) || { echo "$item"; item=; continue; } ;;
     esac
-    buf+="$c"
+    item+="$c"
   done
-  out+=("$buf")
-  printf '%s\n' "${out[@]}"
+  echo "$item"
 }
 
 enc() {
@@ -27,33 +26,36 @@ enc() {
   shift
 
   case $f in
+    raw) printf "%s\n" "$@" ;;
+    uri) { for p in "$@"; do echo "${p%%=*}=$(echo -n "${p#*=}" | jq -sRr @uri)"; done; } | paste -sd '&' ;;
     json)
-      local kv_re='^([_A-Za-z][_A-Za-z0-9]*(\.[_A-Za-z][_A-Za-z0-9]*)*)=(.*)$' v_re='^(\{.*\}|\[.*\]|-?[0-9]+(\.[0-9]+)?|true|false|null)$'
-      local json='{}' tok= k= v=
+      local kv_re='^([_A-Za-z][_A-Za-z0-9]*(\.[_A-Za-z][_A-Za-z0-9]*)*)=(.*)$'
+      local val_re='^(\{.*\}|\[.*\]|-?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?|true|false|null)$' list_re='^\[.*\]$'
+      local json='{}' tok key val
 
       for tok in "$@"; do
-        [[ $tok =~ $kv_re ]] || { echo "bad token: $tok" >&2; exit 1; }
-        k=${BASH_REMATCH[1]} v=${BASH_REMATCH[3]}
+        [[ $tok =~ $kv_re ]] || { echo "error: not a key=value : $tok" >&2; exit 1; }
+        key=${BASH_REMATCH[1]} val=${BASH_REMATCH[3]}
 
-        [[ $v =~ ^\[[^][]*\]$ ]] && {
-          local item quoted=()
+        [[ $val =~ $list_re ]] && {
+          local items=() item=
           while IFS= read -r item; do
-            quoted+=("$(enc json "item=$item" | jq -r '.item')")
-          done< <(split_top_commas "${v:1:${#v}-2}")
-          v="$(IFS=','; printf '[%s]' "${quoted[*]}")"
+            items+=("$(enc json "item=$item" | jq -r '.item')")
+          done< <(comma_items "$val")
+          val="$(IFS=','; printf '[%s]' "${items[*]}")"
         }
 
-        [[ $v =~ $v_re ]] || v="$(printf '%s' "$v" | jq -R '@json') | fromjson"
-        json+="|setpath([\"${k//./\",\"}\"]; ($v))"
+        [[ $val =~ $val_re ]] || val="$(printf '%s' "$val" | jq -R '@json') | fromjson"
+        json+="|setpath([\"${key//./\",\"}\"]; ($val))"
       done
 
-      jq -n "$json";;
-
-    uri) { for p in "$@"; do echo "${p%%=*}=$(echo -n "${p#*=}" | jq -sRr @uri)"; done; } | paste -sd '&' ;;
+      jq -n "$json" ;;
   esac
 }
 
 req() {
+  local encoding=
+  [[ $1 == '--raw' ]] && { encoding=raw; shift; }
   local cmd=('curl' '-sSL') endpoint="$1" verb="${FUNCNAME[1]}" client="${FUNCNAME[2]}"
   shift
 
@@ -63,8 +65,8 @@ req() {
   }
 
   (( $# )) && case $verb in
-    post|put|patch) cmd+=('-H' 'Content-Type: application/json' '-d' "$(enc json $@)")  ;;
-        get|delete) endpoint+="?$(enc uri "$@")"                                        ;;
+    post|put|patch) cmd+=('-H' 'Content-Type: application/json' '-d' "$(enc ${encoding:-json} $@)") ;;
+        get|delete) endpoint+="?$(enc ${encoding:-uri} "$@")"                                       ;;
   esac
 
   "${cmd[@]}" -X "${verb^^}" "${conf[api]}/$endpoint"
