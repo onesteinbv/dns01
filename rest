@@ -9,7 +9,7 @@ conf[auth_var]='OPENPROVIDER_AUTH'
 
 comma_items() {
   local s=$1 depth=0 item=
-  for (( i=1; i<${#s}-1; i++ )); do
+  for (( i=1; i < ${#s} - 1; i++ )); do
     c=${s:i:1}
     case $c in
       [\[{]) (( depth++ ))                            ;;
@@ -43,10 +43,10 @@ enc() {
         [[ $val =~ $list_re ]] && {
           items=()
           while IFS= read -rd '' item; do
-            if [[ $item =~ $list_re ]]; then items+=("$(enc json "tmp=$item" | jq -c '.tmp')")
+            if [[ $item =~ $list_re ]]; then items+=("$(enc json "item=$item" | jq -c '.item')")
             else [[ $item =~ $val_re ]] && items+=("$item") || items+=("$(printf '"%s"' "$item")")
             fi
-          done < <(comma_items "$val")
+          done< <(comma_items "$val")
           val="$(IFS=,; echo "[${items[*]}]")"
         }
 
@@ -101,7 +101,7 @@ VERB
 
 go "$@"
 
-# TODO: improve env save/restore when being sourced
-[[ "${BASH_SOURCE[0]}" != "$0" ]] && unset conf enc req auth go post get put delete patch postj getj putj deletej patchj
+[[ "${BASH_SOURCE[0]}" == "$0" ]] && exit 0
 
-exit 0
+# TODO: improve env save/restore when being sourced
+unset conf enc req auth go post get put delete patch postj getj putj deletej patchj
