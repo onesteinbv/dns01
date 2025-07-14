@@ -6,6 +6,12 @@ conf[auth_ep]='auth/login'
 conf[auth_req]='username=%s password=%s ip=0.0.0.0'
 conf[auth_tok]='.data.token'
 conf[auth_var]='OPENPROVIDER_AUTH'
+conf[err50]='Call‑rate limit reached – slow down or wait a minute'
+conf[err80]='Invalid request – check required fields / JSON shape'
+conf[err81]='Wrong HTTP verb or endpoint – e.g. zone create is POST /dns/zones'
+conf[err98]='Requested data not in data‑set – object does not belong to your account'
+conf[err99]='No data returned – nothing matched the filter'
+conf[err460]='Token expired – run "rest auth" again (token TTL ≈ 48 h)'
 
 comma_items() {
   local s=$1 depth=0 item=
@@ -74,7 +80,20 @@ req() {
         get|delete) endpoint+="?$(enc ${encoding:-uri} "$@")"                                       ;;
   esac
 
-  "${cmd[@]}" -X "${verb^^}" "${conf[api]}/$endpoint"
+  local response status
+  response="$("${cmd[@]}" -X "${verb^^}" "${conf[api]}/$endpoint")" || { echo "Network error"; exit 1; }
+  status=$(jq -r '.code? // empty' <<< "$response")
+
+  [[ $status =~ ^[0-9]+$ && $status -ne 0 ]] && {
+    printf '\nERROR %s – %s\n'  "$status"  "$(jq -r '.desc // .message // empty' <<< "$response")" >&2
+
+    local hint_key="${conf[err${status}]}"
+    [[ -n "$hint_key" ]] && printf 'Hint  – %s\n' "$hint_key}" >&2
+
+    exit 1
+  }
+
+  echo "$response"
 }
 
 auth() {
