@@ -8,17 +8,20 @@ conf[auth_tok]='.data.token'
 conf[auth_var]='OPENPROVIDER_AUTH'
 
 comma_items() {
-  local s="$1" depth=0 item=
-  for (( i=1; i < ${#s} - 1; i++)); do
+  local s=$1 depth=0 item=
+  for (( i=1; i<${#s}-1; i++ )); do
     c=${s:i:1}
     case $c in
-      [\[{]) (( depth++ )) ;;
-      [\]}]) (( depth-- )) ;;
-          ,) (( depth )) || { echo "$item"; item=; continue; } ;;
+      [\[{]) (( depth++ ))                            ;;
+      [\]}]) (( depth-- ))                            ;;
+          ,) (( !depth )) && [[ -n "$item" ]] && {
+               printf '%s\0' "$item"; item=
+               continue
+             }                                        ;;
     esac
-    item+="$c"
+    item+=$c
   done
-  echo "$item"
+  [[ -n "$item" ]] && printf '%s\0' "$item"
 }
 
 enc() {
@@ -38,11 +41,13 @@ enc() {
         key=${BASH_REMATCH[1]} val=${BASH_REMATCH[3]}
 
         [[ $val =~ $list_re ]] && {
-          local items=() item=
-          while IFS= read -r item; do
-            items+=("$(enc json "item=$item" | jq -r '.item')")
-          done< <(comma_items "$val")
-          val="$(IFS=','; printf '[%s]' "${items[*]}")"
+          items=()
+          while IFS= read -rd '' item; do
+            if [[ $item =~ $list_re ]]; then items+=("$(enc json "tmp=$item" | jq -c '.tmp')")
+            else [[ $item =~ $val_re ]] && items+=("$item") || items+=("$(printf '"%s"' "$item")")
+            fi
+          done < <(comma_items "$val")
+          val="$(IFS=,; echo "[${items[*]}]")"
         }
 
         [[ $val =~ $val_re ]] || val="$(printf '%s' "$val" | jq -R '@json') | fromjson"
@@ -94,8 +99,9 @@ VERB
   [[ $(type -t "${cmd}" 2> /dev/null) == 'function' ]] && "$@"
 }
 
-
 go "$@"
 
 # TODO: improve env save/restore when being sourced
 [[ "${BASH_SOURCE[0]}" != "$0" ]] && unset conf enc req auth go post get put delete patch postj getj putj deletej patchj
+
+exit 0
