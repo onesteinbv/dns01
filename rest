@@ -70,7 +70,7 @@ req() {
   }
 
   (( $# )) && case $verb in
-    post|put|patch) cmd+=('-H' 'Content-Type: application/json' '-d' "$(enc ${encoding:-json} $@)") ;;
+    post|put|patch) cmd+=('-H' 'Content-Type: application/json' '-d' "$(enc ${encoding:-json} "$@")") ;;
         get|delete) endpoint+="?$(enc ${encoding:-uri} "$@")"                                       ;;
   esac
 
@@ -82,7 +82,11 @@ auth() {
   read -p  "username: " user
   read -sp "password: " pass
 
-  declare -gx "${conf[auth_var]}"="$(post "${conf[auth_ep]}" "$(printf "${conf[auth_req]}" "$user" "$pass")" | jq -r "${conf[auth_tok]}")"
+  local req req_arr
+  printf -v req "${conf[auth_req]}" "$user" "$pass"
+  read -r -a req_arr <<< "$req"
+
+  declare -gx "${conf[auth_var]}"="$(post "${conf[auth_ep]}" "${req_arr[@]}" | jq -r "${conf[auth_tok]}")"
 }
 
 go() {
