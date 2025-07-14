@@ -1,0 +1,142 @@
+# test_dsl.sh ─ regression tests for the compact DSL encoder
+# Requires: bash 4+, jq, ./rest in the same directory.
+
+set -euo pipefail
+
+REST=./rest     # adjust path if needed
+
+pass() { printf '\e[32m✔ %s\e[0m\n' "$1"; }
+fail() { printf '\e[31m✘ %s\e[0m\n' "$1"; exit 1; }
+
+# ------------------------------------------------------------
+# assert <description> <CLI tokens…>  <<'EXPECT'
+#   <expected JSON>
+# EXPECT
+# ------------------------------------------------------------
+assert() {
+  local desc=$1; shift
+  local expect; expect=$(cat)   # read heredoc into variable
+
+  # run encoder, capture stderr separately
+  local output
+  if ! output=$("$REST" enc json "$@" 2>stderr.txt); then
+      cat stderr.txt; fail "$desc (encoder exited non‑zero)"
+  fi
+  rm -f stderr.txt
+
+  # compare with jq (ignores whitespace & key order)
+  if jq -S -e --argjson a "$output" --argjson b "$expect" '$a==$b' >/dev/null; then
+      pass "$desc"
+  else
+      echo "----- got ----------"; jq -S <<<"$output"
+      echo "----- expected -----"; jq -S <<<"$expect"
+      fail "$desc"
+  fi
+}
+
+# ============================================================
+#                    TEST CASES
+# ============================================================
+
+# 1. simple scalars
+assert "scalar values" \
+  msg=Hello flag=true n=-42 \
+<<'EXPECT'
+{
+  "msg" : "Hello",
+  "flag": true,
+  "n"   : -42
+}
+EXPECT
+
+# 2. dot‑notation nesting
+assert "nested keys" \
+  user.name=John user.age=30 \
+<<'EXPECT'
+{ "user": { "name":"John", "age":30 } }
+EXPECT
+
+# 3. shorthand array of bare words
+assert "bare‑word list" \
+  tags=[alpha,beta,gamma] \
+<<'EXPECT'
+{ "tags": ["alpha","beta","gamma"] }
+EXPECT
+
+# 4. array with mixed types & exponent
+assert "mixed list" \
+  a=[1,true,-1e2,"x"] \
+<<'EXPECT'
+{ "a": [1,true,-100,"x"] }
+EXPECT
+
+# 5. pretty‑printed multi‑line object
+assert "multi‑line object" \
+  payload='{ "x":1,
+             "y":[2,3] }' \
+<<'EXPECT'
+{ "payload": { "x":1, "y":[2,3] } }
+EXPECT
+
+# 6. pretty‑printed multi‑line array with nested object
+assert "multi‑line array" \
+  add="[
+    '{
+      "name":"domain.com",
+      "ttl":900
+    }',
+    1
+  ]" \
+<<'EXPECT'
+{
+  "add":[
+    { "name":"domain.com", "ttl":900 },
+    1
+  ]
+}
+EXPECT
+
+# 7. empty array & empty object
+assert "empty structures" \
+  e1=[] e2={} \
+<<'EXPECT'
+{ "e1":[], "e2":{} }
+EXPECT
+
+# 8. nested shorthand lists
+assert "nested lists" \
+  m=[[a,b],[c,d]] \
+<<'EXPECT'
+{ "m": [["a","b"],["c","d"]] }
+EXPECT
+
+# 9. empty array as sole value
+assert "stand‑alone empty array" \
+  a=[] \
+<<'EXPECT'
+{ "a": [] }
+EXPECT
+
+# 10. shorthand list with empty element and trailing comma
+#     → encoder should drop the empty slots
+assert "skip empty element" \
+  nums=[1,,2,] \
+<<'EXPECT'
+{ "nums": [1,2] }
+EXPECT
+
+# 11. scalar string containing spaces
+assert "string with spaces" \
+  greeting='Hello World' \
+<<'EXPECT'
+{ "greeting": "Hello World" }
+EXPECT
+
+# 12. deep nested shorthand lists
+assert "deep nested lists" \
+  deep=[[[x]]] \
+<<'EXPECT'
+{ "deep": [[["x"]]] }
+EXPECT
+
+echo -e "\nAll tests passed!"
