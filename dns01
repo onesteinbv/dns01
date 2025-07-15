@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+
+declare -A script=()
+script[path]="$(readlink -f "${BASH_SOURCE[0]}")"
+script[dir]="${script[path]%/*}"
+script[name]="${script[path]##*/}"
+
+declare -A conf
+conf[rest_client]="${script[dir]}/rest"
+conf[acme_staging]="https://acme-staging-v02.api.letsencrypt.org/directory"
+conf[acme_live]="https://acme-v02.api.letsencrypt.org/directory"
+conf[acme_email]="jseijo@smoose.nl"
+
+log() { printf '[dns01] %s\n' "$*" >&2; }
+
+wait_propagation() {
+  local record="$1" expect="$2" timeout=${3:-600} backoff=2 ns nameservers+=("8.8.8.8" "1.1.1.1")
+
+  # readarray -t nameservers -O ${#nameservers[@]}< <(dig +short NS "${record#*_acme-challenge.}" @8.8.8.8)
+
+  log "Waiting for TXT propagation ($record)"
+  while (( (timeout -= (backoff *= 2)) > 0 )); do
+    for ns in "${nameservers[@]}"; do
+      [[ "$(dig +short TXT "$record" @"$ns")" == "$expect" ]] && { log "Propagated in ${backoff}s"; return 0; }
+    done
+
+    sleep "$backoff"
+    echo "timeout $timeout backoff $backoff record $record expect $expect ns $ns" >> /tmp/lala
+    printf '.' >&2
+  done
+  echo >&2
+
+  log "Timeout after ${backoff}s waiting for DNS propagation"
+  return 1
+}
+
+challenge() {
+  local mode="$1" domain="$2" token="$3"
+  local base="${domain%%.*}" ext="${domain#*.}" soa=$("${conf[rest_client]}" getj dns/zones/"$domain" | jq -c '.data.soa')
+
+  case $mode in
+    add|present)
+      "${conf[rest_client]}" put dns/zones/"$domain" name="$domain" soa="$soa" \
+        records.add=['{"name":"_acme-challenge","type":"TXT","ttl":600,"value":"'$token'"}']
+      wait_propagation "_acme-challenge.$domain" "$token"
+      ;;
+    del|cleanup)
+      id=$( "${conf[rest_client]}" getj dns/records?domain_name="$domain" | jq -r --arg v "$token" \
+        '.data[] | select(.name=="_acme-challenge" and .value==$v) | .id' | head -n1)
+
+      [[ $id ]] && "${conf[rest_client]}" put dns/zones/"$domain" name="$domain" soa="$soa" \
+        records.remove=['{"name":"_acme-challenge", "type":"TXT", "ttl":600, "value":"'$token'"}']
+      ;;
+
+    *) log "Unknown mode $mode"; return 2 ;;
+  esac
+
+  return 0
+}
+
+certbot_hook() {
+  challenge "$1" "$CERTBOT_DOMAIN" "$CERTBOT_VALIDATION"
+}
+
+traefik_hook() {
+  local arg mode domain token
+  for arg in "$@"; do
+    case $arg in
+      --mode=*)   mode=${arg#*=}   ;;
+      --domain=*) domain=${arg#*=} ;;
+      --token=*)  token=${arg#*=}  ;;
+    esac
+  done
+  challenge "$mode" "$domain" "$token"
+}
+
+help() {
+  echo "Usage: $0 [--create] [--live] domain.tld" >&2
+}
+
+go() {
+  local cmd="$1"
+  [[ $(type -t "${cmd}" 2> /dev/null) == 'function' ]] && { "$@"; return $?; }
+
+  local domain create=false server="${conf[acme_staging]}"
+
+  while (( $# )); do
+    case $1 in
+      --create) create=true                   ;;
+        --live) server="${conf[acme_live]}" ;;
+             *) domain=$1                     ;;
+    esac
+    shift
+  done
+
+  [[ ${domain:-} ]] || { log "Need domain"; exit 1; }
+  local base="${domain%%.*}" ext="${domain#*.}"
+
+  $create && {
+    log "Creating zone $domain (ignored if exists)…"
+    "${conf[rest_client]}" post dns/zones domain.name="$base" domain.extension="$ext" type=master records='[]' 2>/dev/null
+  }
+
+  tmp=$(mktemp -d)
+  # trap 'rm -rf "$tmp"' EXIT
+
+  log "Requesting certificate for *.$domain and $domain ..."
+  certbot certonly --manual --non-interactive \
+    --manual-auth-hook    "$0 certbot_hook add" \
+    --manual-cleanup-hook "$0 certbot_hook del" \
+    --manual-public-ip-logging-ok \
+    --preferred-challenges dns \
+    --server "$server" \
+    --agree-tos --email "${conf[acme_email]}" \
+    -d "*.$domain" -d "$domain" \
+    --config-dir "$tmp/etc" --work-dir "$tmp/work" --logs-dir "$tmp/logs" -v
+
+  cat "$tmp/etc/live/$domain/fullchain.pem"
+}
+
+go "$@"
