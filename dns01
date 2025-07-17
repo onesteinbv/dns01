@@ -13,19 +13,30 @@ conf[acme_email]="jseijo@smoose.nl"
 
 log() { printf '[dns01] %s\n' "$*" >&2; }
 
+parse_domain() {
+  local domain="$1" wildcard=false fq
+  [[ $domain =~ ^(\*\.|)(([^.]+\.)*)([^.]+\.[^.]+)$ ]] && {
+    [[ -n "${BASH_REMATCH[1]}" ]] && wildcard=true
+    local host="${BASH_REMATCH[2]%?}" zone="${BASH_REMATCH[4]}"
+    [[ -n $host ]] && fq="$host.$zone" || fq="$zone"
+
+    echo $wildcard "$fq" "$zone" "$host"
+  }
+
+  return 1
+}
+
 wait_propagation() {
-  local record="$1" expect="$2" timeout=${3:-600} backoff=2 ns nameservers+=("8.8.8.8" "1.1.1.1")
+  local record="$1" expect="\"$2\"" timeout=${3:-600} backoff=2 ns nameservers=("8.8.8.8" "1.1.1.1")
 
   # readarray -t nameservers -O ${#nameservers[@]}< <(dig +short NS "${record#*_acme-challenge.}" @8.8.8.8)
 
   log "Waiting for TXT propagation ($record)"
   while (( (timeout -= (backoff *= 2)) > 0 )); do
     for ns in "${nameservers[@]}"; do
-      [[ "$(dig +short TXT "$record" @"$ns")" == "$expect" ]] && { log "Propagated in ${backoff}s"; return 0; }
+      dig +short TXT "$record" @"$ns" | grep -Fxq "$expect" && { log "Propagated in ${backoff}s via $ns"; exit 0; }
     done
-
     sleep "$backoff"
-    echo "timeout $timeout backoff $backoff record $record expect $expect ns $ns" >> /tmp/lala
     printf '.' >&2
   done
   echo >&2
@@ -35,27 +46,39 @@ wait_propagation() {
 }
 
 challenge() {
-  local mode="$1" domain="$2" token="$3"
-  local base="${domain%%.*}" ext="${domain#*.}" soa=$("${conf[rest_client]}" getj dns/zones/"$domain" | jq -c '.data.soa')
+  local mode="$1" domain="$2" token="$3" wildcard fq zone host
+  read -r wildcard fq zone host< <(parse_domain "$domain") || { log "Invalid domain syntax: $domain"; exit 1; }
+
+  local id=$("${conf[rest_client]}" getj "dns/zones/$zone" | jq -c '.data.id')
+  local name="_acme-challenge${host:+.$host}"
 
   case $mode in
     add|present)
-      "${conf[rest_client]}" put dns/zones/"$domain" name="$domain" soa="$soa" \
-        records.add=['{"name":"_acme-challenge","type":"TXT","ttl":600,"value":"'$token'"}']
-      wait_propagation "_acme-challenge.$domain" "$token"
+      "${conf[rest_client]}" put dns/zones/"$zone" id="$id" name="$name" \
+        records.add="[{
+          \"name\" : \"$name\",
+          \"type\" : \"TXT\",
+          \"ttl\"  : 600,
+          \"value\": \"${token}\"
+        }]"
+
+      wait_propagation "${name}.$zone" "$token"
       ;;
+
     del|cleanup)
-      id=$( "${conf[rest_client]}" getj dns/records?domain_name="$domain" | jq -r --arg v "$token" \
-        '.data[] | select(.name=="_acme-challenge" and .value==$v) | .id' | head -n1)
+      local quoted=$(printf '%s' "$token" | jq -R '@json')
 
-      [[ $id ]] && "${conf[rest_client]}" put dns/zones/"$domain" name="$domain" soa="$soa" \
-        records.remove=['{"name":"_acme-challenge", "type":"TXT", "ttl":600, "value":"'$token'"}']
+      "${conf[rest_client]}" put dns/zones/"$zone" id="$id" \
+        records.remove="[{
+          \"name\" : \"$name\",
+          \"type\" : \"TXT\",
+          \"ttl\"  : 600,
+          \"value\": $quoted
+        }]"
       ;;
 
-    *) log "Unknown mode $mode"; return 2 ;;
+    *) log "Unknown mode: $mode"; return 2 ;;
   esac
-
-  return 0
 }
 
 certbot_hook() {
@@ -82,37 +105,72 @@ go() {
   local cmd="$1"
   [[ $(type -t "${cmd}" 2> /dev/null) == 'function' ]] && { "$@"; return $?; }
 
-  local domain create=false server="${conf[acme_staging]}"
+  local server="${conf[acme_staging]}" create=false combo=false domain addresses=()
 
   while (( $# )); do
     case $1 in
-      --create) create=true                   ;;
+      --create) create=true                 ;;
+       --combo) combo=true                  ;;
+        --addr) addresses+=("$2") ; shift   ;;
         --live) server="${conf[acme_live]}" ;;
-             *) domain=$1                     ;;
+             *) domain="$1"                 ;;
     esac
     shift
   done
 
-  [[ ${domain:-} ]] || { log "Need domain"; exit 1; }
-  local base="${domain%%.*}" ext="${domain#*.}"
+  local wildcard fq zone host
+  read -r wildcard fq zone host< <(parse_domain "$domain") || { log "Invalid domain syntax: $domain"; exit 1; }
 
-  $create && {
-    log "Creating zone $domain (ignored if exists)…"
-    "${conf[rest_client]}" post dns/zones domain.name="$base" domain.extension="$ext" type=master records='[]' 2>/dev/null
+  "${conf[rest_client]}" get "dns/zones/$zone" >/dev/null 2>&1 || {
+    log "Zone $zone is not hosted at Openprovider - aborting"
+    exit 1
   }
 
-  tmp=$(mktemp -d)
-  # trap 'rm -rf "$tmp"' EXIT
+  $create && \
+    if $wildcard; then log "Wilcard domain specified - ignoring --create ..."
+    elif (( ! ${#addresses[@]} )); then log "--create specified, but no addresses were given - ignoring ..."
+    else
+      local address id= record_type=
 
-  log "Requesting certificate for *.$domain and $domain ..."
+      for address in "${addresses[@]}"; do
+        [[ $address == *:* ]] && record_type=AAAA || record_type=A
+
+        "${conf[rest_client]}" getj "dns/zones/$zone" with_records=true \
+          | jq -e --arg n "$fq" --arg t "$record_type" --arg a "$address" \
+          '.data.records[] | select(.name==$n and .type==$t and .value==$a)' >/dev/null && {
+            log "$fq $record_type $address already exists – skipping"
+            continue
+          }
+
+        log "Creating record $fq type $record_type with address $address..."
+
+        local id=${id:=$("${conf[rest_client]}" getj "dns/zones/$zone" | jq -c '.data.id')}
+
+        "${conf[rest_client]}" put "dns/zones/$zone" name="$zone" id="$id" \
+          records.add="[{
+            \"name\":\"$host\",
+            \"type\":\"$record_type\",
+            \"ttl\":900,
+            \"value\":\"$address\"
+        }]"
+      done
+    fi
+
+  local domain_args=("-d" "$domain")
+  $combo && $wildcard && domain_args+=("-d" "${domain#*.}") || domain_args+=("-d" "*.$domain")
+
+  log "Requesting ${combo:+combo }certificate for $domain ..."
+
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
   certbot certonly --manual --non-interactive \
     --manual-auth-hook    "$0 certbot_hook add" \
     --manual-cleanup-hook "$0 certbot_hook del" \
     --manual-public-ip-logging-ok \
     --preferred-challenges dns \
-    --server "$server" \
     --agree-tos --email "${conf[acme_email]}" \
-    -d "*.$domain" -d "$domain" \
+    --server "$server" \
+     "${domain_args[@]}" \
     --config-dir "$tmp/etc" --work-dir "$tmp/work" --logs-dir "$tmp/logs" -v
 
   cat "$tmp/etc/live/$domain/fullchain.pem"
