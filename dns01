@@ -28,60 +28,61 @@ parse_domain() {
 
 wait_propagation() {
   local name="$1" zone="$2" token="$3"
-  local timeout=${4:-1200} backoff=1 max_backoff=45 start=$(date +%s)
-  local now=$start first_green=0 stabilizing=0 stable_threshold=0
-  local n nameservers=() test_nameservers=()
+  local timeout=${4:-1200} backoff=1 max_backoff=45 start=$(date +%s) now=
+  local stabilizing=0 delta=0 stable_threshold=0
+  local nameservers=() test=() i
 
   readarray -t nameservers< <(dig +short NS "$zone" @8.8.8.8)
   (( ${#nameservers[@]} )) || {
     log "Couldn't find authoritative nameservers for zone $zone - aborting"
     return 1
   }
-  test_nameservers=( "${nameservers[@]}" )
+  test=( "${nameservers[@]}" )
 
   log "Waiting for TXT propagation ($name.$zone)"
-  while (( now - start < timeout )); do
-    for (( n = ${#test_nameservers[@]}; n--; )); do
-      dig +short TXT "$name.$zone" @"${test_nameservers[$n]}" | grep -Fq "$token" && unset test_nameservers[$n]
+  while (( (now = $(date +%s)) - start < timeout )); do
+    for (( i = ${#test[@]}; i--; )); do
+      dig +short TXT "$name.$zone" @"${test[$i]}" | grep -Fq "$token" && unset test[$i]
     done
 
-    now=$(date +%s) test_nameservers=( "${test_nameservers[@]}" )
-    (( ${#test_nameservers[@]} )) || {
-      if (( ! stabilizing )); then
-        stabilizing=$now
+    test=( "${test[@]}" )
+    (( ${#test[@]} )) && {
+      stabilizing=0 # cancel any current stabilizing phase
 
-        # decide how long we're going to test to assume a "stable" data plane
-        # depending on how long it took us to this first positive test
-        # longer first-positives are "penalized" and less trusted, so they get
-        # longer stable_threshold values
-
-        # note that the default is "lenient", ie we still will give up and green
-        # light the whole propagation if we reach $timeout before
-        # stable_threshold
-
-        (( first_green = now - start ))
-        if (( first_green < 10 )); then stable_threshold=10
-        elif (( first_green < 30 )); then stable_threshold=30
-        elif (( first_green < 60 )); then stable_threshold=60
-        elif (( first_green < 120 )); then stable_threshold=120
-        elif (( first_green < 240 )); then stable_threshold=240
-        else (( stable_threshold = (timeout - first_green < 10) ? 1 : timeout - first_green ))
-        fi
-
-      elif (( now - stabilizing >= stable_threshold )); then
-        log "Token propagated in $((now - start))s to all authoritative nameservers"
-        return 0
-      fi
-      test_nameservers=( "${nameservers[@]}" )
+      (( backoff = (backoff * 2 >= max_backoff ? max_backoff : backoff * 2) ))
+      printf '%s ' $backoff >&2
+      sleep $backoff
+      continue
     }
 
-    (( backoff = (backoff * 2 >= max_backoff ? max_backoff : backoff * 2) ))
-    printf '%s ' $backoff >&2
-    sleep $backoff
-  done
-  echo >&2
+    # DNS data planes can return flaky results (e.g. from anycast clusters with
+    # unpredictable zone updates), so we can't trust a single successful test,
+    # even with all authoritative servers having answered correctly
 
-  log "Timeout after $((now - start))s waiting for DNS propagation"
+    # so upon a successful test, we enter a "stabilizing" phase where we search
+    # for *sustained streaks* of success until a stable threshold is reached
+
+    # the more it takes since $start to enter stabilization, the less we trust
+    # the data plane, "penalizing" it with higher $stable_threshold values
+
+    # we fail strictly when reaching $timeout before $stable_threshold, even on
+    # the presence of successful test runs (this might be configurable later)
+    (( stabilizing )) || {
+      (( stabilizing = now, delta = now - start ))
+      for stable_threshold in 10 30 60 120 240 480 0; do (( delta < stable_threshold )) && break
+      done
+      (( stable_threshold || (stable_threshold = ((timeout - delta < 10) ? 1 : timeout - delta)) ))
+    }
+
+    (( now - stabilizing >= stable_threshold )) && {
+      log "\nToken propagated in $((now - start))s to all authoritative nameservers"
+      return 0
+    }
+
+    test=( "${nameservers[@]}" )
+  done
+
+  log "\nTimeout after $((now - start))s waiting for DNS propagation"
   return 1
 }
 
