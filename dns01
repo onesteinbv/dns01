@@ -196,8 +196,8 @@ go() {
       done
     fi
 
-  local domain_args=("-d" "$domain")
-  $combo && $wildcard && domain_args+=("-d" "${domain#*.}") || domain_args+=("-d" "*.$domain")
+  local domain_args="-d $domain"
+  $combo && { $wildcard && domain_args+=",${domain#*.}" || domain_args+=",*.$domain" ;} || unset combo
 
   log "Requesting ${combo:+combo }certificate for $domain ..."
 
@@ -210,7 +210,7 @@ go() {
     --preferred-challenges dns \
     --agree-tos --email "${conf[acme_email]}" \
     --server "$server" \
-     "${domain_args[@]}" \
+     $domain_args \
     --config-dir "$tmp/etc" --work-dir "$tmp/work" --logs-dir "$tmp/logs" -v \
   || {
     log "Certbot returned an error. Here are the full logs:"
