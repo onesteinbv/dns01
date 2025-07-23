@@ -9,9 +9,9 @@ declare -A conf
 conf[rest_client]="${script[dir]}/rest"
 conf[acme_staging]="https://acme-staging-v02.api.letsencrypt.org/directory"
 conf[acme_live]="https://acme-v02.api.letsencrypt.org/directory"
-conf[acme_email]="jseijo@smoose.nl"
+conf[acme_email]="acme-challenge@onestein.nl"
 
-log() { printf '[dns01] %s\n' "$*" >&2; }
+log() { printf '[%s] %s\n' "${script[name]}" "$*" >&2; }
 
 parse_domain() {
   local domain="$1" wildcard=false fq
@@ -87,7 +87,7 @@ wait_propagation() {
 
 challenge() {
   local mode="$1" domain="$2" token="$3" wildcard fq zone host
-  read -r wildcard fq zone host< <(parse_domain "$domain") || { log "Invalid domain syntax: $domain"; exit 1; }
+  read -r wildcard fq zone host< <(parse_domain "$domain") || { log "Invalid domain syntax: $domain"; return 1; }
 
   local id=$("${conf[rest_client]}" getj "dns/zones/$zone" | jq -c '.data.id')
   local name="_acme-challenge${host:+.$host}"
@@ -102,7 +102,7 @@ challenge() {
           \"value\": \"${token}\"
         }]"
 
-      wait_propagation "${name}.$zone" "$token"
+      wait_propagation "$name" "$zone" "$token"
       ;;
 
     del|cleanup)
