@@ -42,7 +42,7 @@ parse_domain() {
 wait_propagation() {
   local name="$1" zone="$2" token="$3"
   local start=$(date +%s) now timeout=${4:-1500} backoff=1 min_backoff=2 max_backoff=32
-  local stabilizing=0 delta=0 stable_threshold=0
+  local delta=0 stabilizing=0 streak=0 stable_threshold=0 streak_threshold=10 streak_p stable_p
   local nameservers=() test=() i
 
   for (( i=0; i < 3 && ${#nameservers[@]} == 0; i++ )); do
@@ -58,10 +58,11 @@ wait_propagation() {
 
   log "Waiting for TXT propagation ($name.$zone)"
   test=( "${nameservers[@]}" )
-  while (( (now = $(date +%s)) - start < timeout )); do
-    echo -ne "\ntesting" >&2
+  while (( (full_test = "${#test[@]}" == "${#nameservers[@]}"), (now = $(date +%s)) - start < timeout )); do
+
+    echo -n "testing" >&2
     for i in "${!test[@]}"; do
-      echo -ne " ${test[$i]}" >&2
+      echo -n " ${test[$i]}" >&2
       if dig +short TXT "$name.$zone" @"${test[$i]}" | grep -Fq "$token"; then
         echo -n "✅" >&2
         unset "test[$i]"
@@ -72,28 +73,35 @@ wait_propagation() {
 
     test=( "${test[@]}" )
     if (( ${#test[@]} )); then
-      (( delta = 0, backoff = (backoff * 2 > max_backoff ? max_backoff : backoff * 2) ))
+      (( delta = 0, streak = 0, backoff = (backoff * 2 > max_backoff ? max_backoff : backoff * 2) ))
     else
       (( delta )) || {
         (( (delta = now - (stabilizing ? stabilizing : start)), stabilizing = now ))
         for stable_threshold in 15 30 60 120 240; do (( delta < stable_threshold * 2 )) && break
         done
 
-        log "Probing stabilization (Δ${delta}s, total $((now - start))s). Threshold is at ${stable_threshold}s."
+        log "Probing stabilization (Δ${delta}s, total $((now - start))s). Threshold set to ${stable_threshold}s."
       }
 
-      (( now - stabilizing > stable_threshold )) && {
+      (( backoff = ((stabilizing == now && stable_threshold <= 60) ?
+          stable_threshold : (backoff < min_backoff * 2 ? min_backoff : backoff / 2)),
+        full_test && streak++,
+        streak_p = (streak * 100 / streak_threshold),
+        stable_p = (now - stabilizing) * 100 / stable_threshold ))
+
+      printf 'streak: %s%% (%s/%s), time: %s%% (%s/%s)\n' \
+        $(( streak_p > 100 ? 100 : streak_p )) $streak $streak_threshold      \
+        $(( stable_p > 100 ? 100 : stable_p )) $(( now - stabilizing )) $stable_threshold >&2
+
+      (( streak_p >= 100 && stable_p >= 100 )) && {
         log "Token propagated in $((now - start))s to all authoritative nameservers"
         return 0
       }
 
-      (( backoff = ((stabilizing == now && stable_threshold <= 60)
-        ? stable_threshold : (backoff < min_backoff * 2 ? min_backoff : backoff / 2)) ))
-
       test=( "${nameservers[@]}" )
     fi
 
-    printf 'backing off %s seconds ...' $backoff >&2
+    log "backoff $backoff seconds ..."
     sleep $backoff
   done
 
