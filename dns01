@@ -28,21 +28,31 @@ parse_domain() {
 
 # DNS data planes can return flaky results (e.g. from anycast clusters with
 # unpredictable zone updates), so we can't trust a single successful test, even
-# with with all authoritative servers having answered correctly
+# with all authoritative servers having answered correctly
 
-# so upon a successful test, we enter a "stabilizing" phase where we search for
-# *sustained streaks* of success until a stable threshold is reached
+# Upon a successful test we enter a "stabilizing" phase where we search for
+# *sustained streaks* of success, until a stable threshold is reached
 
-# the more it takes reaching this phase, the less we trust the data plane,
-# "penalizing" it with higher threshold values
+# The more it takes reaching this phase, the less we trust the data plane,
+# "penalizing" it with higher (time) threshold values. Streak *lengths* have
+# their own threshold to meet, and each time a test fails, that may be also
+# penalized. How fast the counter penalization extends the streak threshold is
+# controlled via $streak_penalty_mod.
 
-# we fail strictly when reaching $timeout before $stable_threshold, even on the
-# presence of successful test runs (this might be configurable later)
+# There is a bounded backoff time that slows down when the trend goes toward
+# failure, and speeds up as we tend to green results.
+
+# Ultimately success depends on either: 1) both the time and streak thresholds
+# being met, or 2) the time threshold being surpassed by 200%. Reaching $timeout
+# before those conditions is considered a failure, even in the presence of
+# positive test runs. This might be configurable later but as of now the policy
+# is strict about this.
 
 wait_propagation() {
   local name="$1" zone="$2" token="$3"
   local start=$(date +%s) now timeout=${4:-1500} backoff=1 min_backoff=2 max_backoff=32
-  local delta=0 stabilizing=0 streak=0 stable_threshold=0 streak_threshold=10 streak_p stable_p
+  local delta=0 stabilizing=0 stable_threshold stable_p
+  local streak=0 streak_threshold=10 streak_penalty=0 streak_penalty_mod=4 streak_p
   local nameservers=() test=() i
 
   for (( i=0; i < 3 && ${#nameservers[@]} == 0; i++ )); do
@@ -58,42 +68,42 @@ wait_propagation() {
 
   log "Waiting for TXT propagation ($name.$zone)"
   test=( "${nameservers[@]}" )
-  while (( (full_test = "${#test[@]}" == "${#nameservers[@]}"), (now = $(date +%s)) - start < timeout )); do
-
-    echo -n "testing" >&2
+  while (( (full_test = ${#test[@]} == ${#nameservers[@]}), (now = $(date +%s)) - start < timeout )); do
     for i in "${!test[@]}"; do
-      echo -n " ${test[$i]}" >&2
+      echo -n "${test[$i]}" >&2
       if dig +short TXT "$name.$zone" @"${test[$i]}" | grep -Fq "$token"; then
-        echo -n "✅" >&2
+        echo -n "✅ " >&2
         unset "test[$i]"
-      else echo -n "❌" >&2
+      else echo -n "❌ " >&2
       fi
     done
     echo >&2
 
     test=( "${test[@]}" )
     if (( ${#test[@]} )); then
-      (( delta = 0, streak = 0, backoff = (backoff * 2 > max_backoff ? max_backoff : backoff * 2) ))
+      (( delta = 0, streak = 0,
+         (streak_penalty++ % streak_penalty_mod) || streak_threshold++,
+         backoff = (backoff * 2 > max_backoff ? max_backoff : backoff * 2) ))
     else
       (( delta )) || {
         (( (delta = now - (stabilizing ? stabilizing : start)), stabilizing = now ))
-        for stable_threshold in 15 30 60 120 240; do (( delta < stable_threshold * 2 )) && break
+        for stable_threshold in 15 30 60 90 120 150 180; do (( delta < stable_threshold * 2 )) && break
         done
 
         log "Probing stabilization (Δ${delta}s, total $((now - start))s). Threshold set to ${stable_threshold}s."
       }
 
       (( backoff = ((stabilizing == now && stable_threshold <= 60) ?
-          stable_threshold : (backoff < min_backoff * 2 ? min_backoff : backoff / 2)),
-        full_test && streak++,
-        streak_p = (streak * 100 / streak_threshold),
-        stable_p = (now - stabilizing) * 100 / stable_threshold ))
+           stable_threshold / 2 : (backoff < min_backoff * 2 ? min_backoff : backoff / 2)),
+         full_test && streak++,
+         streak_p = (streak * 100 / streak_threshold),
+         stable_p = (now - stabilizing) * 100 / stable_threshold ))
 
-      printf 'streak: %s%% (%s/%s), time: %s%% (%s/%s)\n' \
-        $(( streak_p > 100 ? 100 : streak_p )) $streak $streak_threshold      \
+      printf 'streak: %s%% (%s/%s), time: %s%% (%s/%s)\n'                 \
+        $(( streak_p > 100 ? 100 : streak_p )) $streak $streak_threshold  \
         $(( stable_p > 100 ? 100 : stable_p )) $(( now - stabilizing )) $stable_threshold >&2
 
-      (( streak_p >= 100 && stable_p >= 100 )) && {
+      (( streak_p >= 100 && stable_p >= 100 || streak_p >= 200 )) && {
         log "Token propagated in $((now - start))s to all authoritative nameservers"
         return 0
       }
