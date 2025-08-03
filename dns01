@@ -1,17 +1,27 @@
 #!/usr/bin/env bash
 
-declare -A script=()
-script[path]="$(readlink -f "${BASH_SOURCE[0]}")"
-script[dir]="${script[path]%/*}"
-script[name]="${script[path]##*/}"
+declare -A script conf
 
-declare -A conf
+script[path]="$(readlink -f "${BASH_SOURCE[0]}")"
+script[name]="${script[path]##*/}"
+script[dir]="${script[path]%/*}"
+
 conf[rest_client]="${script[dir]}/rest"
 conf[acme_staging]="https://acme-staging-v02.api.letsencrypt.org/directory"
 conf[acme_live]="https://acme-v02.api.letsencrypt.org/directory"
 conf[acme_email]="acme-challenge@onestein.nl"
 
-log() { printf '[%s] %s\n' "${script[name]}" "$*" >&2; }
+# wait_propagation controls
+conf[dns01_timeout]=1500
+conf[dns01_backoff]=1
+conf[dns01_backoff_min]=2
+conf[dns01_backoff_max]=32
+conf[dns01_streak]=true
+conf[dns01_streak_threshold]=10
+conf[dns01_streak_penalty]=0
+conf[dns01_streak_mod]=4
+
+source "${script[dir]}/common"
 
 parse_domain() {
   local domain="$1" wildcard=false fq
@@ -26,53 +36,44 @@ parse_domain() {
   return 1
 }
 
-# DNS data planes can return flaky results (e.g. from anycast clusters with
-# unpredictable zone updates), so we can't trust a single successful test, even
-# with all authoritative servers having answered correctly
-
-# Upon a successful test we enter a "stabilizing" phase where we search for
-# *sustained streaks* of success, until a stable threshold is reached
-
-# The more it takes reaching this phase, the less we trust the data plane,
-# "penalizing" it with higher (time) threshold values. Streak *lengths* have
-# their own threshold to meet, and each time a test fails, that may be also
-# penalized. How fast the counter penalization extends the streak threshold is
-# controlled via $streak_penalty_mod.
-
-# There is a bounded backoff time that slows down when the trend goes toward
-# failure, and speeds up as we tend to green results.
-
-# Ultimately success depends on either: 1) both the time and streak thresholds
-# being met, or 2) the time threshold being surpassed by 200%. Reaching $timeout
-# before those conditions is considered a failure, even in the presence of
-# positive test runs. This might be configurable later but as of now the policy
-# is strict about this.
-
 wait_propagation() {
   local name="$1" zone="$2" token="$3"
-  local start=$(date +%s) now timeout=${4:-1500} backoff=1 min_backoff=2 max_backoff=32
-  local delta=0 stabilizing=0 stable_threshold stable_p
-  local streak=0 streak_threshold=10 streak_penalty=0 streak_penalty_mod=4 streak_p
-  local nameservers=() test=() i
+  local start=$(date +%s) now delta=0 stabilizing=0 stable_threshold stable_p streak_p
 
+  # conf[] tunables
+  local timeout="${conf[dns01_timeout]}" backoff="${conf[dns01_backoff]}"
+  local backoff_min="${conf[dns01_backoff_min]}" backoff_max="${conf[dns01_backoff_max]}"
+
+  local streak="${conf[dns01_streak]}"
+  local streak_threshold="${conf[dns01_streak_threshold]}"
+  local streak_penalty="${conf[dns01_streak_penalty]}"
+  local streak_penalty_mod="${conf[dns01_streak_mod]}"
+
+  local nameservers=() i
   for (( i=0; i < 3 && ${#nameservers[@]} == 0; i++ )); do
-    log "Locating authoritative servers for $zone ..."
+    msg "Locating authoritative servers for $zone ..."
     readarray -t nameservers< <(dig +short NS "$zone" @8.8.8.8)
-    sleep $min_backoff
+    sleep $backoff_min
   done
 
   (( ${#nameservers[@]} )) || {
-    log "Couldn't find authoritative nameservers for $zone - aborting"
+    msg "Couldn't find authoritative nameservers for $zone - aborting"
     return 1
   }
 
-  log "Waiting for TXT propagation ($name.$zone)"
-  test=( "${nameservers[@]}" )
-  while (( (full_test = ${#test[@]} == ${#nameservers[@]}), (now = $(date +%s)) - start < timeout )); do
+  msg "Waiting for TXT propagation ($name.$zone)"
+  local test=( "${nameservers[@]}" ) extend_streak
+  while (( (extend_streak=${#test[@]} == ${#nameservers[@]}), (now=$(date +%s)) - start < timeout )); do
     for i in "${!test[@]}"; do
       echo -n "${test[$i]}" >&2
       if dig +short TXT "$name.$zone" @"${test[$i]}" | grep -Fq "$token"; then
         echo -n "✅ " >&2
+
+        ${conf[dns01_streak]} || {
+          msg "Token propagated in $((now - start))s to all authoritative nameservers"
+          return 0
+        }
+
         unset "test[$i]"
       else echo -n "❌ " >&2
       fi
@@ -80,51 +81,60 @@ wait_propagation() {
     echo >&2
 
     test=( "${test[@]}" )
+
+    # not all servers succeeded - test remaining ones at next iteration
     if (( ${#test[@]} )); then
-      (( delta = 0, streak = 0,
-         (streak_penalty++ % streak_penalty_mod) || streak_threshold++,
-         backoff = (backoff * 2 > max_backoff ? max_backoff : backoff * 2) ))
+      # cancel stabilization streaks, penalize streak
+      ${conf[dns01_streak]} && (( delta=0, streak=0, (streak_penalty++ % streak_penalty_mod) || streak_threshold++ ))
+
+      # increase backoff
+      (( backoff=(backoff >= backoff_max ? backoff_max : backoff * 2) ))
+
+    # all servers cleared, either in one iteration (extend_streak=1) or more
     else
-      (( delta )) || {
-        (( (delta = now - (stabilizing ? stabilizing : start)), stabilizing = now ))
+      # delta holds the time offset from $start or a previous stabilization
+      # 0 means we're starting a fresh stabilization phase
+      (( !delta )) && {
+        (( (delta=now - (stabilizing ? stabilizing : start)), stabilizing=now ))
         for stable_threshold in 15 30 60 90 120 150 180; do (( delta < stable_threshold * 2 )) && break
         done
 
-        log "Probing stabilization (Δ${delta}s, total $((now - start))s). Threshold set to ${stable_threshold}s."
+        msg "Probing stabilization (Δ${delta}s, total $((now - start))s). Threshold set to ${stable_threshold}s."
       }
 
-      (( backoff = ((stabilizing == now && stable_threshold <= 60) ?
-           stable_threshold / 2 : (backoff < min_backoff * 2 ? min_backoff : backoff / 2)),
-         full_test && streak++,
-         streak_p = (streak * 100 / streak_threshold),
-         stable_p = (now - stabilizing) * 100 / stable_threshold ))
+      # update streak metrics and backoff
+      (( extend_streak && streak++,
+        streak_p = (streak * 100 / streak_threshold),
+        stable_p = (now - stabilizing) * 100 / stable_threshold,
+        backoff=((stabilizing == now && stable_threshold <= 60) ?
+          stable_threshold / 2 : (backoff <= backoff_min ? backoff_min : backoff / 2)) ))
 
       printf 'streak: %s%% (%s/%s), time: %s%% (%s/%s)\n'                 \
         $(( streak_p > 100 ? 100 : streak_p )) $streak $streak_threshold  \
         $(( stable_p > 100 ? 100 : stable_p )) $(( now - stabilizing )) $stable_threshold >&2
 
       (( streak_p >= 100 && stable_p >= 100 || streak_p >= 200 )) && {
-        log "Token propagated in $((now - start))s to all authoritative nameservers"
+        msg "Token propagated in $((now - start))s to all authoritative nameservers"
         return 0
       }
 
       test=( "${nameservers[@]}" )
     fi
 
-    log "backoff $backoff seconds ..."
+    msg "backoff $backoff seconds ..."
     sleep $backoff
   done
 
-  echo >&2
-  log "Timeout after $((now - start))s waiting for DNS propagation"
+  msg "Timeout after $((now - start))s waiting for DNS propagation"
   return 1
 }
 
 challenge() {
   local mode="$1" domain="$2" token="$3" wildcard fq zone host
-  read -r wildcard fq zone host< <(parse_domain "$domain") || { log "Invalid domain syntax: $domain"; return 1; }
+  read -r wildcard fq zone host< <(parse_domain "$domain") || err "Invalid domain syntax: $domain"
 
-  local id=$("${conf[rest_client]}" getj "dns/zones/$zone" | jq -c '.data.id')
+  local id
+  id=$("${conf[rest_client]}" getj "dns/zones/$zone" | jq -c '.data.id') || return $?
   local name="_acme-challenge${host:+.$host}"
 
   case $mode in
@@ -135,9 +145,7 @@ challenge() {
           \"type\" : \"TXT\",
           \"ttl\"  : 600,
           \"value\": \"${token}\"
-        }]"
-
-      wait_propagation "$name" "$zone" "$token"
+        }]" && wait_propagation "$name" "$zone" "$token"
       ;;
 
     del|cleanup)
@@ -152,7 +160,7 @@ challenge() {
         }]"
       ;;
 
-    *) log "Unknown mode: $mode"; return 2 ;;
+    *) err "Unknown mode: $mode" ;;
   esac
 }
 
@@ -161,14 +169,23 @@ certbot_hook() {
 }
 
 traefik_hook() {
-  local arg mode domain token
-  for arg in "$@"; do
-    case $arg in
-      --mode=*)   mode=${arg#*=}   ;;
-      --domain=*) domain=${arg#*=} ;;
-      --token=*)  token=${arg#*=}  ;;
-    esac
-  done
+  local mode="$1" domain token="$3"
+  [[ "$2" =~ ^_acme-challenge\.(.*)\.$ ]] && domain="${BASH_REMATCH[1]}"
+
+  if [[ "${conf[dns01_native]}" == 'false' ]]; then
+    conf[dns01_timeout]="$EXEC_PROPAGATION_TIMEOUT"
+    conf[dns01_backoff]="$EXEC_POLLING_INTERVAL"
+    conf[dns01_backoff_min]="$EXEC_POLLING_INTERVAL"
+    conf[dns01_backoff_max]="$EXEC_POLLING_INTERVAL"
+    conf[dns01_streak]=false
+  elif [[ "${conf[dns01_native]}" != 'true' ]]; then
+    [[ -v DNS01_TIMEOUT ]] || conf[dns01_timeout]="$EXEC_PROPAGATION_TIMEOUT"
+    [[ -v DNS01_BACKOFF ]] || conf[dns01_backoff]="$EXEC_POLLING_INTERVAL"
+    [[ -v DNS01_BACKOFF_MIN ]] || conf[dns01_backoff_min]="$EXEC_POLLING_INTERVAL"
+    [[ -v DNS01_BACKOFF_MAX ]] || conf[dns01_backoff_max]="$EXEC_POLLING_INTERVAL"
+    [[ -v DNS01_STREAK ]] || conf[dns01_streak]=false
+  fi
+
   challenge "$mode" "$domain" "$token"
 }
 
@@ -176,10 +193,32 @@ help() {
   echo "Usage: $0 [--create] [--live] domain.tld" >&2
 }
 
-go() {
-  local cmd="$1"
-  [[ $(type -t "${cmd}" 2> /dev/null) == 'function' ]] && { "$@"; return $?; }
+env2conf(){
+  local v rx="$1"
+  shift
 
+  for v in "$@"; do
+    v="DNS01_${v^^}"
+    [[ "${!v}" =~ $rx ]] && conf[${v,,}]="${!v}"
+  done
+}
+
+go() {
+  # map environment configuration
+  env2conf "^[0-9]+$" {timeout,streak{,_{threshold,penalty,mod}},backoff{,_{min,max}}}
+  env2conf "^(true|false)$" native streak
+
+  # command dispatch mode (for now just any function)
+  [[ $(type -t "${cmd}" 2> /dev/null) == 'function' ]] && {
+    if [[ "$cmd" =~ ^(present|cleanup)$ ]]; then cmd='traefik_hook'
+    else shift
+    fi
+
+    "$cmd" "$@"
+    return $?
+  }
+
+  # main / certbot mode
   local server="${conf[acme_staging]}" create=false combo=false domain addresses=()
 
   while (( $# )); do
@@ -194,32 +233,29 @@ go() {
   done
 
   local wildcard fq zone host
-  read -r wildcard fq zone host< <(parse_domain "$domain") || { log "Invalid domain syntax: $domain"; exit 1; }
+  read -r wildcard fq zone host< <(parse_domain "$domain") || err "Invalid domain syntax: $domain"
 
-  "${conf[rest_client]}" get "dns/zones/$zone" >/dev/null 2>&1 || {
-    log "Zone $zone is not hosted at Openprovider - aborting"
-    exit 1
-  }
+  "${conf[rest_client]}" get "dns/zones/$zone" &> /dev/null || err "Zone $zone is not hosted at Openprovider - aborting"
 
   $create && \
-    if $wildcard; then log "Wilcard domain specified - ignoring --create ..."
-    elif (( ! ${#addresses[@]} )); then log "--create specified, but no addresses were given - ignoring ..."
+    if $wildcard; then msg "Wilcard domain specified - ignoring --create ..."
+    elif (( ! ${#addresses[@]} )); then msg "--create specified, but no addresses were given - ignoring ..."
     else
-      local address id= record_type=
+      local address record_type id=
 
       for address in "${addresses[@]}"; do
         [[ $address == *:* ]] && record_type=AAAA || record_type=A
 
         "${conf[rest_client]}" getj "dns/zones/$zone" with_records=true \
           | jq -e --arg n "$fq" --arg t "$record_type" --arg a "$address" \
-          '.data.records[] | select(.name==$n and .type==$t and .value==$a)' >/dev/null && {
-            log "$fq $record_type $address already exists – skipping"
+          '.data.records[] | select(.name==$n and .type==$t and .value==$a)' &> /dev/null && {
+            msg "$fq $record_type $address already exists – skipping"
             continue
           }
 
-        log "Creating record $fq type $record_type with address $address..."
+        msg "Creating record $fq type $record_type with address $address..."
 
-        local id=${id:=$("${conf[rest_client]}" getj "dns/zones/$zone" | jq -c '.data.id')}
+        id=${id:=$("${conf[rest_client]}" getj "dns/zones/$zone" | jq -c '.data.id')} || return $?
 
         "${conf[rest_client]}" put "dns/zones/$zone" name="$zone" id="$id" \
           records.add="[{
@@ -234,26 +270,31 @@ go() {
   local domain_args="-d $domain"
   $combo && { $wildcard && domain_args+=",${domain#*.}" || domain_args+=",*.$domain" ;} || unset combo
 
-  log "Requesting ${combo:+combo }certificate for $domain ..."
+  msg "Requesting ${combo:+combo }certificate for $domain ..."
 
-  tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
+  [[ ! -v conf[certbot_dir] ]] && {
+    conf[certbot_dir]="$(mktemp -d)"
+    trap 'rm -rf "${conf[certbot_dir]}"' EXIT
+  }
+
   certbot certonly --manual --non-interactive \
-    --manual-auth-hook    "$0 certbot_hook add" \
-    --manual-cleanup-hook "$0 certbot_hook del" \
+    --manual-auth-hook    "${script[path]} certbot_hook add" \
+    --manual-cleanup-hook "${script[path]} certbot_hook del" \
     --manual-public-ip-logging-ok \
     --preferred-challenges dns \
     --agree-tos --email "${conf[acme_email]}" \
     --server "$server" \
      $domain_args \
-    --config-dir "$tmp/etc" --work-dir "$tmp/work" --logs-dir "$tmp/logs" -v \
+    --config-dir "${conf[certbot_dir]}/etc" \
+    --work-dir "${conf[certbot_dir]}/work" \
+    --logs-dir "${conf[certbot_dir]}/logs" -v \
   || {
-    log "Certbot returned an error. Here are the full logs:"
-    cat "$tmp/logs/letsencrypt.log"
-    exit 1
+    msg "Certbot failed. Here are the full logs:"
+    cat "${conf[certbot_dir]}/logs/letsencrypt.log"
+    err "Certbot returned error - aborting"
   }
 
-  cat "$tmp/etc/live/$domain/"{privkey,fullchain}.pem
+  cat "${conf[certbot_dir]}/etc/live/${domain#\*.}/"{privkey,fullchain}.pem
 }
 
 go "$@"

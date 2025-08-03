@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+
+set -o pipefail
+
+declare -A script conf err hint
+
+err[ok]=0
+err[fail]=1
+err[network]=10
+err[parse]=20
+err[auth]=30
+err[api]=40
+
+hint[http50]='Slow down or wait a minute'
+hint[http80]='Check required fields / JSON shape'
+hint[http81]='Wrong HTTP verb / endpoint'
+hint[http98]='Check that object belongs to your account'
+hint[http99]='Nothing matched the filter'
+
+msg() { printf '[%s] %s\n' "${script[name]}" "$*" >&2; }
+
+err() {
+  local code="${1:-1}" msg hint_msg
+
+  [[ -v "hint[$code]" ]] && hint_msg="${hint[$code]}"
+
+  if [[ -v "err[$code]" ]]; then shift
+  else
+    [[ -v "hint[$code]" ]] && shift
+    code=fail
+  fi
+
+  case "$code" in
+      ok) msg="OK"            ;;
+    fail) msg="error"         ;;
+       *) msg="error($code)"  ;;
+  esac
+
+  if (( $# )); then msg+=": $*${hint_msg:+ - $hint_msg}"
+  else msg+="${hint_msg:+: $hint_msg}"
+  fi
+
+  msg "$msg"
+
+  exit "${err[$code]}"
+}
