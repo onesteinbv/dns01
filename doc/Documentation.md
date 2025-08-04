@@ -14,7 +14,7 @@
 |     `DNS01_BACKOFF`      | Adaptive backoff - initial value |     `dns01_backoff`      | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
 |   `DNS01_BACKOFF_MIN`    |  Adaptive backoff - lower bound  |   `dns01_backoff_min`    | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
 |   `DNS01_BACKOFF_MAX`    |  Adaptive backoff - upper bound  |   `dns01_backoff_max`    | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
-|      `DNS01_NATIVE`      |   Native propagation detection   |      `dns01_native`      | `true`: fully disable lego semantics<br>`false`: fully enable lego semantics (can't be overriden)<br>`<any other value>`: enable lego semantics (other variables can override) |
+|      `DNS01_NATIVE`      |   Native propagation detection   |      `dns01_native`      | `true`: fully disable lego semantics<br>`false`: fully enable lego semantics (can't be overriden)<br>`fallback`: try `false` behavior first otherwise `true` behavior<br/>(`DNS_*` variables can override)<br>`<any other value>`: enable lego semantics<br/>(`DNS_*` variables can override) |
 
 ### Command line switches
 
@@ -85,5 +85,6 @@ Additionally, the variable `DNS01_NATIVE` provides a shortcut to fully use lego 
 - When undefined or set to another value than `true` or `false`, the above rules apply
 - When set to `true`, drop lego compatibility and use the native propagation detection, honoring any `DNS01_*` variables
 - When set to `false`, ignore all `DNS01_*` variables, force strict mapping and full lego propagation detection
+- When set to `fallback`, attempt first the behaviors as if `false` were specified, and if that fails, behave as if `true` was specified
 
 **Note:** when using the lego detection but allowing backoff scaling, the scaling can only be **positive** (ie increased each time we poll negatively for propagation). There won't ever be a negative scaling, as the lego algorithm totally succeeds on the first positive reply.

@@ -151,9 +151,8 @@ challenge() {
           \"type\" : \"TXT\",
           \"ttl\"  : 600,
           \"value\": \"${token}\"
-        }]" && wait_propagation "$name" "$zone" "$token"
-      ;;
-
+        }]" || return $?                                          ;&
+    wait_propagation) wait_propagation "$name" "$zone" "$token"   ;;
     del|cleanup)
       local quoted=$(printf '%s' "$token" | jq -R '@json')
 
@@ -163,10 +162,8 @@ challenge() {
           \"type\" : \"TXT\",
           \"ttl\"  : 600,
           \"value\": $quoted
-        }]"
-      ;;
-
-    *) err "Unknown mode: $mode" ;;
+        }]"                                                       ;;
+    *) err "Unknown mode: $mode"                                  ;;
   esac
 }
 
@@ -175,24 +172,33 @@ certbot_hook() {
 }
 
 traefik_hook() {
-  local mode="$1" domain token="$3"
-  [[ "$2" =~ ^_acme-challenge\.(.*)\.$ ]] && domain="${BASH_REMATCH[1]}"
+  local mode="$1" domain="$2" token="$3"
+  [[ "$domain" =~ ^_acme-challenge\.(.*)\.$ ]] && domain="${BASH_REMATCH[1]}"
 
-  if [[ "${conf[dns01_native]}" == 'false' ]]; then
-    conf[dns01_timeout]="$EXEC_PROPAGATION_TIMEOUT"
-    conf[dns01_backoff]="$EXEC_POLLING_INTERVAL"
-    conf[dns01_backoff_min]="$EXEC_POLLING_INTERVAL"
-    conf[dns01_backoff_max]="$EXEC_POLLING_INTERVAL"
-    conf[dns01_streak]=false
-  elif [[ "${conf[dns01_native]}" != 'true' ]]; then
-    [[ -v DNS01_TIMEOUT ]] || conf[dns01_timeout]="$EXEC_PROPAGATION_TIMEOUT"
-    [[ -v DNS01_BACKOFF ]] || conf[dns01_backoff]="$EXEC_POLLING_INTERVAL"
-    [[ -v DNS01_BACKOFF_MIN ]] || conf[dns01_backoff_min]="$EXEC_POLLING_INTERVAL"
-    [[ -v DNS01_BACKOFF_MAX ]] || conf[dns01_backoff_max]="$EXEC_POLLING_INTERVAL"
-    [[ -v DNS01_STREAK ]] || conf[dns01_streak]=false
-  fi
+  case "${conf[dns01_native]}" in
+    fallback) "${conf[@]@A}" && declare -gA native_conf="${_#*=}"                     ;&
+    false)
+      conf[dns01_timeout]="$EXEC_PROPAGATION_TIMEOUT"
+      conf[dns01_backoff]="$EXEC_POLLING_INTERVAL"
+      conf[dns01_backoff_min]="$EXEC_POLLING_INTERVAL"
+      conf[dns01_backoff_max]="$EXEC_POLLING_INTERVAL"
+      conf[dns01_streak]=false                                                        ;;
+    *)
+      [[ -v DNS01_TIMEOUT ]] || conf[dns01_timeout]="$EXEC_PROPAGATION_TIMEOUT"
+      [[ -v DNS01_BACKOFF ]] || conf[dns01_backoff]="$EXEC_POLLING_INTERVAL"
+      [[ -v DNS01_BACKOFF_MIN ]] || conf[dns01_backoff_min]="$EXEC_POLLING_INTERVAL"
+      [[ -v DNS01_BACKOFF_MAX ]] || conf[dns01_backoff_max]="$EXEC_POLLING_INTERVAL"
+      [[ -v DNS01_STREAK ]] || conf[dns01_streak]=false                               ;;
+  esac
 
-  challenge "$mode" "$domain" "$token"
+  challenge "$mode" "$domain" "$token" || {
+    [[ "${conf[dns01_native]}" == 'fallback' ]] && {
+      msg "Basic propagation detection failed, trying native streak mode ..."
+      "${native_conf[@]@A}" && declare -A conf="${_#*=}"
+      conf[dns01_streak]=true
+      challenge wait_propagation "$domain" "$token"
+    }
+  }
 }
 
 help() {
@@ -212,7 +218,8 @@ env2conf(){
 go() {
   # map environment configuration
   env2conf "^[0-9]+$" {timeout,streak{,_{threshold,penalty,mod}},backoff{,_{min,max}}}
-  env2conf "^(true|false)$" native streak
+  env2conf "^(true|false)$" streak
+  env2conf "^(true|false|auto)$" native
 
   # command dispatch mode
   local cmd="$1"
