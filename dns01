@@ -44,7 +44,12 @@ wait_propagation() {
   local timeout="${conf[dns01_timeout]}" backoff="${conf[dns01_backoff]}"
   local backoff_min="${conf[dns01_backoff_min]}" backoff_max="${conf[dns01_backoff_max]}"
 
-  local streak="${conf[dns01_streak]}"
+  local streak
+  case "${conf[dns01_streak]}" in
+    true|false) streak=1                        ;;
+             *) streak="${conf[dns01_streak]}"
+                conf[dns01_streak]=true         ;;
+  esac
   local streak_threshold="${conf[dns01_streak_threshold]}"
   local streak_penalty="${conf[dns01_streak_penalty]}"
   local streak_penalty_mod="${conf[dns01_streak_mod]}"
@@ -70,6 +75,7 @@ wait_propagation() {
         echo -n "✅ " >&2
 
         ${conf[dns01_streak]} || {
+          echo >&2
           msg "Token propagated in $((now - start))s to all authoritative nameservers"
           return 0
         }
@@ -208,15 +214,13 @@ go() {
   env2conf "^[0-9]+$" {timeout,streak{,_{threshold,penalty,mod}},backoff{,_{min,max}}}
   env2conf "^(true|false)$" native streak
 
-  # command dispatch mode (for now just any function)
-  [[ $(type -t "${cmd}" 2> /dev/null) == 'function' ]] && {
-    if [[ "$cmd" =~ ^(present|cleanup)$ ]]; then cmd='traefik_hook'
-    else shift
-    fi
-
-    "$cmd" "$@"
-    return $?
-  }
+  # command dispatch mode
+  local cmd="$1"
+  if [[ "$cmd" =~ ^(present|cleanup)$ ]]; then cmd='traefik_hook'
+  elif [[ $(type -t "${cmd}" 2> /dev/null) == 'function' ]]; then shift
+  else unset cmd
+  fi
+  [[ -v cmd ]] && { "$cmd" "$@"; return $?; }
 
   # main / certbot mode
   local server="${conf[acme_staging]}" create=false combo=false domain addresses=()
