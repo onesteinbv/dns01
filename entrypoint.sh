@@ -5,13 +5,20 @@ mode="${MODE:-idle}"
 
 case "$mode" in
   idle)
-    echo "[entrypoint] Idle mode: waiting indefinitely"
+    echo "[entrypoint] Idle mode"
     tail -f /dev/null
     ;;
 
+  spool)
+    echo "[entrypoint] Spool mode"
+    ln -sfv "$DNS01_PATH/spool.sh" "$DNS01_SPOOL/spool.sh"
+    mkdir -vp "$DNS01_SPOOL/spool"
+    exec "$DNS01_SPOOL/spool.sh daemon"
+    ;;
+
   certbot)
-    echo "[entrypoint] Running certbot with dns01 hooks"
-    exec /opt/dns01/dns01 "$@"
+    echo "[entrypoint] Certbot mode"
+    exec "$DNS01_PATH/dns01" "$@"
     ;;
 
   certbot-long)
@@ -19,13 +26,13 @@ case "$mode" in
     exit 2
     ;;
 
-  webhook)
-    echo "[entrypoint] Webhook mode is not yet implemented."
+  listen)
+    echo "[entrypoint] Listen mode is not yet implemented"
     exit 2
     ;;
 
   *)
-    echo "[entrypoint] Unknown MODE='$mode'. Supported: idle, certbot, certbot-long, webhook"
+    echo "[entrypoint] Unknown MODE='$mode'. Supported: idle, spool, certbot, certbot-long, listen"
     exit 1
     ;;
 esac

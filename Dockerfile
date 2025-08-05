@@ -8,10 +8,12 @@ RUN apt-get update && apt-get install -y \
     certbot \
  && rm -rf /var/lib/apt/lists/*
 
-COPY dns01 rest common /opt/dns01/
+ENV DNS01_PATH="/opt/dns01"
+ENV PATH="$DNS01_PATH:$PATH"
+
+COPY dns01 "$DNS01_PATH"
+COPY spool.sh "$DNS01_PATH/spool.sh"
 COPY entrypoint.sh /entrypoint.sh
 
-ENV PATH="/opt/dns01:$PATH"
-WORKDIR /opt/dns01/
-
+WORKDIR /
 ENTRYPOINT ["/entrypoint.sh"]

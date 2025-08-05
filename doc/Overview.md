@@ -46,13 +46,16 @@ a bash script to automate DNS01 ACME challenges with DNS servers (initially only
  - ~~Idempotent cleanup + timeout handling~~
  - ~~log -> msg~~
  - ~~err: use log, arrays err and hint, show message, return with code / exit~~
- - ~~make wait_propagation fully use `conf[]`~~
+- ~~make wait_propagation fully use `conf[]
+- ~~Traefik "exec" provider compatibility (minus raw mode)~~
+- ~~Write Dockerfile & minimal entrypoint for certbot modes~~
 
 #### priority bucket 1
-- ~~Traefik "exec" provider compatibility (minus raw mode)~~
-- Write Dockerfile & minimal entrypoint for certbot modes
-- Helm chart, ArgoCD app with image and secret with conf environment for the scripts
-- Traefik "manual" provider
+- spool mode
+ - entrypoint: initialize spool directory, loop forever (read spool, dispatch dns01, write exit status)
+ - synchronous spool dispatcher: write id + request + params, wait for id + response, return
+ - push docker image
+ - traefik chart plumbing
 
 #### deliver initial product
 - Write initial documentation
@@ -76,6 +79,7 @@ a bash script to automate DNS01 ACME challenges with DNS servers (initially only
 ### phase 2 - finish kubernetes plumbing
 #### priority bucket 1
 - CI/CD
+- Helm chart, ArgoCD app
 - Create canonical certbot dirs if they don't exist (for cronjobs etc)
 - Add long-lived certbot mode (cronjob)
 * Add lightweight HTTP listener, support traefik's "httpreq" POST only initially
