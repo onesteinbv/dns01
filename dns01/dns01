@@ -45,6 +45,7 @@ wait_propagation() {
   local backoff_min="${conf[dns01_backoff_min]}" backoff_max="${conf[dns01_backoff_max]}"
 
   local streak
+  # handle bool/integer typing in dns01_streak (should be two vars really)
   case "${conf[dns01_streak]}" in
     true|false) streak=1                        ;;
              *) streak="${conf[dns01_streak]}"
@@ -74,6 +75,7 @@ wait_propagation() {
       if dig +short TXT "$name.$zone" @"${test[$i]}" | grep -Fq "$token"; then
         echo -n "✅ " >&2
 
+        # lego-style success
         ${conf[dns01_streak]} || {
           echo >&2
           msg "Token propagated in $((now - start))s to all authoritative nameservers"
@@ -88,7 +90,7 @@ wait_propagation() {
 
     test=( "${test[@]}" )
 
-    # not all servers succeeded - test remaining ones at next iteration
+    # some servers failed, continue with those at next iteration
     if (( ${#test[@]} )); then
       # cancel stabilization streaks, penalize streak
       ${conf[dns01_streak]} && (( delta=0, streak=0, (streak_penalty++ % streak_penalty_mod) || streak_threshold++ ))
@@ -96,7 +98,7 @@ wait_propagation() {
       # increase backoff
       (( backoff=(backoff >= backoff_max ? backoff_max : backoff * 2) ))
 
-    # all servers cleared, either in one iteration (extend_streak=1) or more
+    # all servers succeeded, in one iteration (extend_streak=1) or more
     else
       # delta holds the time offset from $start or a previous stabilization
       # 0 means we're starting a fresh stabilization phase
@@ -119,6 +121,7 @@ wait_propagation() {
         $(( streak_p > 100 ? 100 : streak_p )) $streak $streak_threshold  \
         $(( stable_p > 100 ? 100 : stable_p )) $(( now - stabilizing )) $stable_threshold >&2
 
+      # native-style success
       (( streak_p >= 100 && stable_p >= 100 || streak_p >= 200 )) && {
         msg "Token propagated in $((now - start))s to all authoritative nameservers"
         return 0
@@ -152,7 +155,9 @@ challenge() {
           \"ttl\"  : 600,
           \"value\": \"${token}\"
         }]" || return $?                                          ;&
+
     wait_propagation) wait_propagation "$name" "$zone" "$token"   ;;
+
     del|cleanup)
       local quoted=$(printf '%s' "$token" | jq -R '@json')
 
@@ -163,6 +168,7 @@ challenge() {
           \"ttl\"  : 600,
           \"value\": $quoted
         }]"                                                       ;;
+
     *) err "Unknown mode: $mode"                                  ;;
   esac
 }
@@ -237,7 +243,7 @@ go() {
   env2conf "^(true|false)$" streak
   env2conf "^(true|false|auto)$" native
 
-  # command dispatch mode
+  # command dispatch mode ------------------------------------------------------
   local cmd="$1"
   if [[ "$cmd" =~ ^(present|cleanup)$ ]]; then cmd='traefik_hook'
   elif [[ $(type -t "${cmd}" 2> /dev/null) == 'function' ]]; then shift
@@ -245,7 +251,7 @@ go() {
   fi
   [[ -v cmd ]] && { "$cmd" "$@"; return $?; }
 
-  # main / certbot mode
+  # main / certbot mode --------------------------------------------------------
   local server="${conf[acme_staging]}" create=false combo=false domain addresses=()
 
   while (( $# )); do

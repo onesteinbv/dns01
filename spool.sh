@@ -1,32 +1,26 @@
 #!/bin/sh
-# spool.sh — job spooler for dns01
 
-# Mode: present|cleanup => client mode; daemon => worker
-MODE="$1"; shift
-
-# Derive script directory and default spool directory
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 SPOOL_DIR="${DNS01_SPOOL:-$SCRIPT_DIR}/spool"
 SPOOL_TIMEOUT=1500
-SPOOL_JOB="$DNS01_PATH/dns01"
+SPOOL_JOB="${DNS01_PATH:-.}/dns01"
 
-# dispatch request, block until response or timeout
+# synchronous spool client
 send_job() {
   CMD="$1"; shift
 
-  # timestamp+PID
   JOB_ID="$(date +%s)-$$"
   REQUEST="$SPOOL_DIR/$JOB_ID.request"
   RESPONSE="$SPOOL_DIR/$JOB_ID.response"
 
-  # write command and args, one per line
+  # spool our request
   {
     echo "$CMD"
     for ARG in "$@"; do printf '%s\n' "$ARG"; done
   } > "$REQUEST"
 
-  # wait for a response
+  # wait for a response or timeout
   i=0
   while [ ! -f "$RESPONSE" ]; do
     if [ "$i" -ge "$SPOOL_TIMEOUT" ]; then
@@ -37,15 +31,15 @@ send_job() {
     i=$((i + 1))
   done
 
-  # read the response, clean up, and return it
+  # return response
   RETVAL=$(cat "$RESPONSE")
   rm -f "$RESPONSE"
   return "$RETVAL"
 }
 
-# daemon mode: watch the spool, handle job dispatching and request/response traffic
+# watch the spool, handle job dispatching and request/response traffic
 daemon() {
-  echo "[spool] daemon started in $SPOOL_DIR"
+  echo "[spool] daemon started in $SCRIPT_DIR, spool in $SPOOL_DIR"
 
   while true; do
     set -- "$SPOOL_DIR"/*.request
@@ -56,13 +50,11 @@ daemon() {
       export JOB_ID="$(basename "$REQUEST" .request)"
       RESPONSE="$SPOOL_DIR/$JOB_ID.response"
 
-      # read command and args line-by-line
-      CMD_LINE=""
-      JOB_ARGS=""
       # read first line as CMD, remaining lines as args
+      CMD_LINE="" JOB_ARGS=""
       { read -r CMD_LINE && JOB_CMD="$CMD_LINE" && JOB_ARGS="$(sed '1d' "$REQUEST")"; } < "$REQUEST"
 
-      echo "[spool] dispatching job id=$JOB_ID (command: \"$JOB_CMD\")"
+      echo "[spool] dispatching asynchronous job id=$JOB_ID (command: \"$JOB_CMD\")"
       set -- $JOB_ARGS
       ( "$SPOOL_JOB" "$JOB_CMD" "$@"; echo "$?" > "$RESPONSE") &
       rm -f "$REQUEST"
@@ -75,8 +67,15 @@ help() {
   exit 2
 }
 
-case "$MODE" in
-  present|cleanup) send_job "$MODE" "$@" ;;
-  daemon) daemon ;;
-  *) help ;;
-esac
+go() {
+  COMMAND="$1"
+  shift
+
+  case "$COMMAND" in
+    present|cleanup) send_job "$COMMAND" "$@" ;;
+    daemon) daemon ;;
+    *) help ;;
+  esac
+}
+
+go "$@"
