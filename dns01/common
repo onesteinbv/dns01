@@ -17,7 +17,7 @@ hint[http81]='Wrong HTTP verb / endpoint'
 hint[http98]='Check that object belongs to your account'
 hint[http99]='Nothing matched the filter'
 
-msg() { printf '%s[%s] %s\n' "${JOB_ID:+($JOB_ID) }" "${script[name]}" "$*" >&2; }
+msg() { printf '%s %s[%s] %s\n' "$(date '+%Y-%m-%dT%TZ')" "${JOB_ID:+($JOB_ID) }" "${script[name]}" "$*" >&2; }
 
 err() {
   local code="${1:-1}" msg hint_msg

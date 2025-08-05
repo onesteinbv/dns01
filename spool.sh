@@ -65,7 +65,7 @@ daemon() {
       echo "[spool] dispatching job id=$JOB_ID (command: \"$JOB_CMD\")"
       set -- $JOB_ARGS
       ( "$SPOOL_JOB" "$JOB_CMD" "$@"; echo "$?" > "$RESPONSE") &
-      rm -fv "$REQUEST"
+      rm -f "$REQUEST"
     done
   done
 }
