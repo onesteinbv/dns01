@@ -15,5 +15,7 @@ COPY dns01 "$DNS01_PATH"
 COPY spool.sh "$DNS01_PATH/spool.sh"
 COPY entrypoint.sh /entrypoint.sh
 
-WORKDIR /
+RUN chmod -R 755 "$DNS01_PATH"
+RUN chmod 755 /entrypoint.sh
+
 ENTRYPOINT ["/entrypoint.sh"]

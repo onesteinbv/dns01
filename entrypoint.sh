@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mode="${MODE:-idle}"
+mode="${DNS01_MODE:-idle}"
 
 case "$mode" in
   idle)
@@ -11,9 +11,9 @@ case "$mode" in
 
   spool)
     echo "[entrypoint] Spool mode"
-    ln -sfv "$DNS01_PATH/spool.sh" "$DNS01_SPOOL/spool.sh"
-    mkdir -vp "$DNS01_SPOOL/spool"
-    exec "$DNS01_SPOOL/spool.sh daemon"
+    cp -f "$DNS01_PATH/spool.sh" "$DNS01_SPOOL/spool.sh"
+    [[ -d "$DNS01_SPOOL/spool" ]] || mkdir "$DNS01_SPOOL/spool"
+    exec "$DNS01_SPOOL/spool.sh" daemon
     ;;
 
   certbot)

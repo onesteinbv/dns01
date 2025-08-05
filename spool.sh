@@ -8,7 +8,7 @@ MODE="$1"; shift
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 SPOOL_DIR="${DNS01_SPOOL:-$SCRIPT_DIR}/spool"
-SPOOL_TIMEOUT=30
+SPOOL_TIMEOUT=1500
 SPOOL_JOB="$DNS01_PATH/dns01"
 
 # dispatch request, block until response or timeout
@@ -20,7 +20,6 @@ send_job() {
   REQUEST="$SPOOL_DIR/$JOB_ID.request"
   RESPONSE="$SPOOL_DIR/$JOB_ID.response"
 
-  mkdir -p "$SPOOL_DIR"
   # write command and args, one per line
   {
     echo "$CMD"
@@ -47,7 +46,6 @@ send_job() {
 # daemon mode: watch the spool, handle job dispatching and request/response traffic
 daemon() {
   echo "[spool] daemon started in $SPOOL_DIR"
-  mkdir -p "$SPOOL_DIR"
 
   while true; do
     set -- "$SPOOL_DIR"/*.request
