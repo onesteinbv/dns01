@@ -3,8 +3,8 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 SPOOL_DIR="${DNS01_SPOOL:-$SCRIPT_DIR}/spool"
-SPOOL_TIMEOUT=1500
 SPOOL_JOB="${DNS01_PATH:-.}/dns01"
+SPOOL_TIMEOUT="${DNS01_TIMEOUT:-1500}"
 
 # synchronous spool client
 send_job() {
