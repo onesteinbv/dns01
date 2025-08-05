@@ -177,31 +177,33 @@ traefik_hook() {
 
   case "${conf[dns01_native]}" in
     fallback) "${conf[@]@A}" && declare -gA native_conf="${_#*=}"                     ;&
+
     false)
       conf[dns01_timeout]="$EXEC_PROPAGATION_TIMEOUT"
       conf[dns01_backoff]="$EXEC_POLLING_INTERVAL"
       conf[dns01_backoff_min]="$EXEC_POLLING_INTERVAL"
       conf[dns01_backoff_max]="$EXEC_POLLING_INTERVAL"
       conf[dns01_streak]=false                                                        ;;
+
+    true) true                                                                        ;;
+
     *)
       [[ -v DNS01_TIMEOUT ]] || {
         [[ -v EXEC_PROPAGATION_TIMEOUT ]] && conf[dns01_timeout]="$EXEC_PROPAGATION_TIMEOUT"
       }
 
       [[ -v DNS01_BACKOFF ]] || {
-        [[ -v EXEC_PROPAGATION_TIMEOUT ]] && conf[dns01_backoff]="$EXEC_POLLING_INTERVAL"
+        [[ -v EXEC_POLLING_INTERVAL ]] && conf[dns01_backoff]="$EXEC_POLLING_INTERVAL"
       }
 
       [[ -v DNS01_BACKOFF_MIN ]] || {
-        [[ -v EXEC_PROPAGATION_TIMEOUT ]] && conf[dns01_backoff_min]="$EXEC_POLLING_INTERVAL"
+        [[ -v EXEC_POLLING_INTERVAL ]] && conf[dns01_backoff_min]="$EXEC_POLLING_INTERVAL"
       }
       [[ -v DNS01_BACKOFF_MAX ]] || {
-        [[ -v EXEC_PROPAGATION_TIMEOUT ]] && conf[dns01_backoff_max]="$EXEC_POLLING_INTERVAL"
+        [[ -v EXEC_POLLING_INTERVAL ]] && conf[dns01_backoff_max]="$EXEC_POLLING_INTERVAL"
       }
 
-      [[ -v DNS01_STREAK ]] || {
-        [[ -v EXEC_PROPAGATION_TIMEOUT ]] && conf[dns01_streak]=false
-      }
+      [[ -v DNS01_STREAK ]] || conf[dns01_streak]=false
       ;;
   esac
 
