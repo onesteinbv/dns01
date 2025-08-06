@@ -24,10 +24,11 @@ conf[dns01_streak_mod]=4
 source "${script[dir]}/common"
 
 parse_domain() {
-  local domain="$1" wildcard=false fq
+  local domain="$1" wildcard=false fq zone host
   [[ $domain =~ ^(\*\.|)(([^.]+\.)*)([^.]+\.[^.]+)$ ]] && {
     [[ -n "${BASH_REMATCH[1]}" ]] && wildcard=true
-    local host="${BASH_REMATCH[2]%?}" zone="${BASH_REMATCH[4]}"
+
+    host="${BASH_REMATCH[2]%?}" zone="${BASH_REMATCH[4]}"
     [[ -n $host ]] && fq="$host.$zone" || fq="$zone"
 
     echo $wildcard "$fq" "$zone" "$host"
@@ -61,11 +62,7 @@ wait_propagation() {
     readarray -t nameservers< <(dig +short NS "$zone" @8.8.8.8)
     sleep $backoff_min
   done
-
-  (( ${#nameservers[@]} )) || {
-    msg "Couldn't find authoritative nameservers for $zone - aborting"
-    return 1
-  }
+  (( ${#nameservers[@]} )) || err "Couldn't find authoritative nameservers for $zone - aborting"
 
   msg "Waiting for TXT propagation ($name.$zone)"
   local test=( "${nameservers[@]}" ) extend_streak
@@ -93,7 +90,8 @@ wait_propagation() {
     # some servers failed, continue with those at next iteration
     if (( ${#test[@]} )); then
       # cancel stabilization streaks, penalize streak
-      ${conf[dns01_streak]} && (( delta=0, streak=0, (streak_penalty++ % streak_penalty_mod) || streak_threshold++ ))
+      ${conf[dns01_streak]} && (( delta=0, streak=0,
+        (streak_penalty++ % streak_penalty_mod) || streak_threshold++ ))
 
       # increase backoff
       (( backoff=(backoff >= backoff_max ? backoff_max : backoff * 2) ))
