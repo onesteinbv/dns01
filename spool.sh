@@ -11,27 +11,19 @@ send_job() {
   CMD="$1"; shift
 
   JOB_ID="$(date +%s)-$$"
-  REQUEST="$SPOOL_DIR/$JOB_ID.request"
+  { echo "$CMD"; for ARG in "$@"; do printf '%s\n' "$ARG"; done; } > "$SPOOL_DIR/$JOB_ID.request"
+
   RESPONSE="$SPOOL_DIR/$JOB_ID.response"
-
-  # spool our request
-  {
-    echo "$CMD"
-    for ARG in "$@"; do printf '%s\n' "$ARG"; done
-  } > "$REQUEST"
-
-  # wait for a response or timeout
-  i=0
+  i="$SPOOL_TIMEOUT"
   while [ ! -f "$RESPONSE" ]; do
-    if [ "$i" -ge "$SPOOL_TIMEOUT" ]; then
+    if [ "$i" -eq 0 ]; then
       echo "[spool] timeout waiting for $RESPONSE" >&2
       return 1
     fi
     sleep 1
-    i=$((i + 1))
+    i=$((i - 1))
   done
 
-  # return response
   RETVAL=$(cat "$RESPONSE")
   rm -f "$RESPONSE"
   return "$RETVAL"
@@ -47,16 +39,15 @@ daemon() {
 
     for REQUEST in "$SPOOL_DIR"/*.request; do
       [ -e "$REQUEST" ] || continue
+
+      CMD="" ARGS=""
+      { read -r CMD && ARGS="$(cat)"; } < "$REQUEST"
+
       export JOB_ID="$(basename "$REQUEST" .request)"
-      RESPONSE="$SPOOL_DIR/$JOB_ID.response"
+      echo "[spool] dispatching asynchronous job id=$JOB_ID (command: \"$CMD\")"
 
-      # read first line as CMD, remaining lines as args
-      CMD_LINE="" JOB_ARGS=""
-      { read -r CMD_LINE && JOB_CMD="$CMD_LINE" && JOB_ARGS="$(sed '1d' "$REQUEST")"; } < "$REQUEST"
-
-      echo "[spool] dispatching asynchronous job id=$JOB_ID (command: \"$JOB_CMD\")"
-      set -- $JOB_ARGS
-      ( "$SPOOL_JOB" "$JOB_CMD" "$@"; echo "$?" > "$RESPONSE") &
+      set -- $ARGS
+      ( "$SPOOL_JOB" "$CMD" "$@"; echo "$?" > "$SPOOL_DIR/$JOB_ID.response") &
       rm -f "$REQUEST"
     done
   done
