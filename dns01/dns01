@@ -132,8 +132,7 @@ wait_propagation() {
     sleep $backoff
   done
 
-  msg "Timeout after $((now - start))s waiting for DNS propagation"
-  return 1
+  err "Timeout after $((now - start))s waiting for DNS propagation"
 }
 
 challenge() {

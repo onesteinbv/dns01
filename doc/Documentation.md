@@ -1,3 +1,153 @@
+## Overview
+
+This repository includes tooling to handle DNS01 ACME challenges with a focus on Traefik/Lego support and Openprovider. Support for other clients and providers should be easy to add on top of the current code. 
+
+Some components that can be used independently include a generic CLI utility for REST interfaces similar to httpie.
+
+## Components
+
+## `rest`
+a bash script to interact with REST backends from the command line and scripts, intended for CLI or scripting
+
+- requirements: `jq` and `curl`
+- authentication credentials from the environment or stdin input
+
+## `dns01`
+a bash script to automate DNS01 ACME challenges (initially only openprovider support)
+
+- requirements: `rest` script, `certbot` if using certbot generation
+- `certbot` modes: 
+  * one-shot: returns certificate and key, stops
+  * long-lived: automated renewal with `certbot` cronjobs in a docker image
+- extensive compatibility with Traefik/lego
+- **TODO** optional HTTP listener supporting cert-manager and traefik APIs
+- supports wildcard domains
+- optional creation of combo certificates with `--combo` (apex+wildcard)
+- optional creation of A/AAAA records (with `--create` and `--address`)
+- challenge-only modes (always one-shot, certificate lifecycle managed by clients)
+
+## `spool.sh`
+
+a spool based asynchronous interface for processing ACME registrations 
+
+## `entrypoint.sh`
+
+the entry point script to control operating mode in docker images
+
+
+
+## Installation
+
+### Standalone use
+
+The requirements for using the scripts directly are listed in the section **Components**. Add the `dns01` subdirectory of this repo to `PATH` or call the scripts there directly, the code can locate other components by determining its location on each call.
+
+### Docker image
+
+The docker image uses entrypoint.sh to control the operation mode. The mode is selected with the `DNS01_MODE` environment variable. Refer to **Configuration** for a description of all the behaviors controlled via environment variables.
+
+### Traefik plugin
+
+These are instructions intended for Traefik installations using the official Helm chart. The script must be used for now as a Traefik `exec` plugin, until a long-lived listener added which will enable using the `httpreq` plugin. 
+
+#### Set up the spool directory
+
+Add a new volume under `.Values.deployment.additionalVolumes`:
+
+```yaml
+additionalVolumes:
+ - name: acme-scripts
+   mountPath: /acme-scripts
+   readOnly: false 
+```
+
+Mount the volume on the Traefik container:
+
+```yaml
+additionalVolumeMounts:
+  - name: acme-scripts
+    mountPath: /acme-scripts
+    readOnly: false
+```
+
+Ensure ownership and permissions for the Traefik process on the volume (example using an init container on `.Values.deployment.initContainers`):
+
+```yaml
+initContainers:
+  # The "volume-permissions" init container is required if you run into permission issues.
+  # Related issue: https://github.com/traefik/traefik-helm-chart/issues/396
+  - name: volume-permissions
+    image: busybox:latest
+    command:
+      - sh
+      - -c
+      - |
+        echo "Setting up /acme-scripts..."
+        mkdir -p /acme-scripts/spool
+        chown -R 65532:65532 /acme-scripts
+        chmod -R 700 /acme-scripts
+    securityContext:
+      runAsNonRoot: false
+      runAsUser: 0
+      runAsGroup: 0
+    volumeMounts:
+      - name: acme-scripts
+        mountPath: /acme-scripts
+```
+
+#### Add the docker image as an additional container 
+
+Add a new entry under `.Values.deployment.additionalContainers`:
+
+```yaml
+additionalContainers:
+  - name: dns01
+    image: ghcr.io/3coma3/dns01:latest
+    imagePullPolicy: Always
+    volumeMounts:
+      - name: acme-scripts
+        mountPath: /acme-scripts
+        readOnly: false
+    env:
+    - name: REST_USERNAME
+      valueFrom:
+        secretKeyRef:
+          name: traefik
+          key: openprovider_username
+    - name: REST_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: traefik
+          key: openprovider_password
+    - name: DNS01_MODE
+      value: spool
+    - name: DNS01_SPOOL
+      value: /acme-scripts
+    - name: DNS01_NATIVE
+      value: "true" 
+```
+
+#### Set up the spool mechanism as a Trafik exec plugin
+
+```yaml
+env:
+  - name: EXEC_PATH
+    value: /acme-scripts/spool.sh
+    
+certificatesResolvers:
+  dns01:
+    acme:
+      email: acme-challenge@onestein.nl
+      storage: /data/acme.json
+      tlsChallenge: false
+      httpChallenge: false
+      dnsChallenge:
+        provider: exec
+        disablePropagationCheck: true
+```
+
+
+
 ## Configuration
 
 ### Internal configuration

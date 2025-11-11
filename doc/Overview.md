@@ -1,27 +1,3 @@
-Support for github actions, gitlab hooks, terraform or any other platform should be easy to implement by users with this base
-
-# Components
-
-## `rest`
-a bash script to interact with REST backends from the command line and scripts, intended for CLI or scripting
-
-- requirements: `jq` and `curl`
-- authentication credentials from the environment or stdin input
-
-## `dns01`
-a bash script to automate DNS01 ACME challenges (initially only openprovider support)
-
-- requirements: `rest` script, `certbot` if using certbot generation
-- `certbot` modes: 
-  * one-shot: returns certificate and key, stops
-  * long-lived: automated renewal with `certbot` cronjobs in a docker image
-- extensive compatibility with Traefik/lego
-- optional HTTP listener supporting two payload formats: cert-manager and traefik
-- supports wildcard domains
-- optional creation of combo certificates with `--combo` (apex+wildcard)
-- optional creation of A/AAAA records (with `--create` and `--address`)
-- challenge-only modes (always one-shot, cert lifecycle managed by clients)
-
 ## k8s apps (helm/ArgoCD)
 - traefik "manual" provider
 - traefik "httpreq" provider
@@ -44,7 +20,7 @@ a bash script to automate DNS01 ACME challenges (initially only openprovider sup
  - ~~log -> msg~~
  - ~~err: use log, arrays err and hint, show message, return with code / exit~~
 - ~~make wait_propagation fully use `conf[]
-- ~~Traefik "exec" provider compatibility (minus raw mode)~~
+- ~~Traefik "exec" provider compatibility (minus raw mode) via spooler~~
 - ~~write Dockerfile & minimal entrypoint for certbot modes~~
 - ~~spool mode~~
  - ~~entrypoint: initialize spool directory, loop forever (read spool, dispatch dns01, write exit status)~~
@@ -66,7 +42,7 @@ a bash script to automate DNS01 ACME challenges (initially only openprovider sup
 - send relevant env/extra config from traefik via spool
 - spooler: handle cleanup, confirmations, better info on send_job, extend failure modes
 
-- improve HTTP error messages (preparse at enc or helper in common)
+- improve HTTP error and status messages (preparse at enc or helper in common)
 - macro templates + function for record boilerplate
 - configurable / default TTLs
 - add controls for **time** threshold scale penalization besides streak length
@@ -101,4 +77,4 @@ a bash script to automate DNS01 ACME challenges (initially only openprovider sup
 
 - support lego RAW mode
 - retool `rest` as a lightweight shim on top of httpie
-- add static binaries for "real" traefik exec support
+- add static binaries for "real" traefik `exec` support

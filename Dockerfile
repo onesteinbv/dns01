@@ -1,12 +1,7 @@
 FROM debian:bullseye-slim
 
-RUN apt-get update && apt-get install -y \
-    bash \
-    curl \
-    jq \
-    dnsutils \
-    certbot \
- && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y bash curl jq dnsutils certbot \
+  && rm -rf /var/lib/apt/lists/*
 
 ENV DNS01_PATH="/opt/dns01"
 ENV PATH="$DNS01_PATH:$PATH"
