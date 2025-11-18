@@ -232,7 +232,7 @@ go() {
   env2conf DNS01_ "^(true|false)$" streak
   env2conf DNS01_ "^(true|false|fallback)$" native
 
-  # command dispatch mode ------------------------------------------------------
+  # command dispatch modes -----------------------------------------------------
   local cmd="$1"
   if [[ "$cmd" =~ ^(present|cleanup)$ ]]; then cmd='traefik_hook'
   elif [[ $(type -t "${cmd}" 2> /dev/null) == 'function' ]]; then shift
@@ -240,7 +240,7 @@ go() {
   fi
   [[ -v cmd ]] && { "$cmd" "$@"; return $?; }
 
-  # main / certbot mode --------------------------------------------------------
+  # main / certbot modes -------------------------------------------------------
   local server="${conf[acme_staging]}" create=false combo=false domain addresses=()
 
   while (( $# )); do
