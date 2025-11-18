@@ -101,7 +101,7 @@ req() {
 }
 
 auth() {
-  local user="$REST_USERNAME" pass="$REST_PASSWORD" client="${FUNCNAME[1]}"
+  local user="${REST_USERNAME:-$1}" pass="${REST_PASSWORD:-$2}" client="${FUNCNAME[1]}"
 
   [[ -z $user || -z $pass ]] && {
     if [[ -t 0 ]]; then
