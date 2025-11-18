@@ -230,7 +230,7 @@ go() {
   # map environment  -----------------------------------------------------------
   env2conf DNS01_ "^[0-9]+$" {timeout,streak{,_{threshold,penalty,mod}},backoff{,_{min,max}}}
   env2conf DNS01_ "^(true|false)$" streak
-  env2conf DNS01_ "^(true|false|auto)$" native
+  env2conf DNS01_ "^(true|false|fallback)$" native
 
   # command dispatch mode ------------------------------------------------------
   local cmd="$1"
