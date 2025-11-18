@@ -12,8 +12,10 @@ case "$mode" in
 
   spool)
     echo "[entrypoint] starting spool mode"
-    cp -f "$DNS01_PATH/spool.sh" "$DNS01_SPOOL/spool.sh"
+
+    export SPOOL_JOB="$DNS01_PATH/dns01"
     [[ -d "$DNS01_SPOOL/spool" ]] || mkdir "$DNS01_SPOOL/spool"
+    cp -f "$DNS01_PATH/spool.sh" "$DNS01_SPOOL"
     exec "$DNS01_SPOOL/spool.sh" daemon
     ;;
 
