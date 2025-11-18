@@ -224,21 +224,11 @@ help() {
   echo "Usage: $0 [--create] [--live] domain.tld" >&2
 }
 
-env2conf(){
-  local v rx="$1"
-  shift
-
-  for v in "$@"; do
-    v="DNS01_${v^^}"
-    [[ "${!v}" =~ $rx ]] && conf[${v,,}]="${!v}"
-  done
-}
-
 go() {
-  # map environment configuration
-  env2conf "^[0-9]+$" {timeout,streak{,_{threshold,penalty,mod}},backoff{,_{min,max}}}
-  env2conf "^(true|false)$" streak
-  env2conf "^(true|false|auto)$" native
+  # map environment  -----------------------------------------------------------
+  env2conf DNS01_ "^[0-9]+$" {timeout,streak{,_{threshold,penalty,mod}},backoff{,_{min,max}}}
+  env2conf DNS01_ "^(true|false)$" streak
+  env2conf DNS01_ "^(true|false|auto)$" native
 
   # command dispatch mode ------------------------------------------------------
   local cmd="$1"

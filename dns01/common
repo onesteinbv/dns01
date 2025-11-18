@@ -17,6 +17,18 @@ hint[http81]='Wrong HTTP verb / endpoint'
 hint[http98]='Check that object belongs to your account'
 hint[http99]='Nothing matched the filter'
 
+# boilerplate helper
+# regex match prefixed env vars to conf[] entries
+env2conf(){
+  local v prefix="$1" rx="$2"
+  shift 2
+
+  for v in "$@"; do
+    v="${prefix}${v^^}"
+    [[ "${!v}" =~ $rx ]] && conf[${v,,}]="${!v}"
+  done
+}
+
 msg() { printf '%s %s[%s] %s\n' "$(date '+%Y-%m-%dT%TZ')" "${JOB_ID:+job $JOB_ID }" "${script[name]}" "$*" >&2; }
 
 err() {
