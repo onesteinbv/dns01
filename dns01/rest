@@ -125,17 +125,18 @@ auth() {
 }
 
 go() {
-  local verb cmd="$1"
+  local verb
 
   for verb in post get put delete patch; do
     IFS= read -rd '' verb <<VERB
  ${verb}() { req "\$@"; }
-${verb}j() { $verb "\$@" | jq; }
+${verb}j() { req "\$@" | jq; }
 VERB
     eval "$verb"
   done
 
-  [[ $(type -t "${cmd}" 2> /dev/null) == 'function' ]] && "$@"
+  while [[ "$1" == @(${FUNCNAME[0]}|req|comma_items) ]]; do shift; done
+  [[ $(type -t "$1" 2> /dev/null) == 'function' ]] && "$@"
 }
 
 go "$@"
