@@ -78,3 +78,17 @@
 - support lego RAW mode
 - retool `rest` as a lightweight shim on top of httpie
 - add static binaries for "real" traefik `exec` support
+
+
+
+
+
+**TODO**
+
+optional HTTP listener supporting cert-manager and traefik API 
+
+one-shot: returns certificate and key, stops
+
+long-lived: automated renewal with `certbot` cronjobs in a docker image
+
+have the spooler preserve multi-word arguments (base64 or something)
