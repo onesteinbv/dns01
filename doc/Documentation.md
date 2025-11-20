@@ -1,19 +1,41 @@
 # Overview
 
-This repository includes tools to handle DNS01 ACME challenges with a focus on Traefik/Lego and Openprovider, although support for other clients and providers should be easy to add with the current code. 
+The Lego library powers ACME negotiation in Traefik, and includes a set of drivers for DNS providers enabling their use with the DNS-01 challenge. For those providers lacking native drivers targeting their API, Lego offers two generic ones that can be used to glue the support in: [exec](https://go-acme.github.io/lego/dns/exec/index.html) and [httpreq](https://go-acme.github.io/lego/dns/httpreq/index.html). This was the case with OpenProvider when integrating DNS-01 with Traefik, which motivated starting this project.
+
+Development and testing were done interactively using the certbot utility to manage the certificates and perform the challenges, with a bit of Bash code to wrap the certbot calls and provide the ***challenge hooks***. These are handlers that Lego/Traefik or certbot will call to create the TXT records that an ACME server like LetsEncrypt will fetch to validate the DNS-01 challenge.
+
+While testing the hook code it was found that certbot does not verify that the newly created TXT record has propagated on the DNS data plane before returning control to ACME, meaning that any checks are expected to be done before the hook returns.
+
+With Lego/Traefik the situation isn't much better. There is an optimistic poll with back-off and timeout, that greenlits the ACME server *on the first successful response*. With OpenProvider, this logic caused the DNS-01 challenges to fail in a [number of scenarios](#adaptive-propagation-detection-the-native-mode).
+
+Thus, efforts were focused on trying to improve the guarantees on the TXT record convergence in the shortest possible time: after the hook requests the TXT record creation, it will start polling all the authoritative servers testing for *streaks* of positive probes while (like Lego), avoiding throttling by refraining from polling too fast. The streak thresholds and backoffs are adaptive, and change depending on whether DNS shows “good” or “bad” convergence.
+
+The remaining pieces are basically K8S integration, and you will find all the details in this documentation about how to use this with Traefik. Future development is going to focus on making **dns01** useful in more diverse scenarios:
+
+- support other DNS providers by reusing the Lego drivers and/or add a native plugin system
+- support other clients besides K8S/Traefik such as cert-manager, or custom workflows
+- Argo stack integration
+- have as many components able to be used fully independently (target A/AAA creation, propagation detection, etc.)
 
 # Components
 
-## `rest`
-A minimal script to interact with REST backends similar to httpie, intended for scripting or CLI usage
+## `dns01/common`
 
-### requirements
+Like the name implies this is code that is reused from other scripts. It does things like error handling, output formatting and so on.
 
-`jq` and `curl`
 
-the code in the `common` script, should be made available at the same directory as this script
 
-### configuration
+## `dns01/rest`
+
+This is a minimal script to interact with REST APIs intended for scripting or CLI usage, similar to [httpie](https://httpie.io/).
+
+### Requirements
+
+- jq
+- curl
+- the `dns01/common` script
+
+### Configuration
 
 These entries are expected to be defined in a `conf` associative array:
 
@@ -21,26 +43,26 @@ These entries are expected to be defined in a `conf` associative array:
 | :------------: | :----------------------------------------------------------: |
 |     `api`      |       Base URL to where requests are sent (target API)       |
 |   `auth_ep`    |     Authentication endpoint path component at target API     |
-|   `auth_req`   | A string as per the target API login request format. The first and second `%s` entries are mapped to the user name and password (or analogous secret token). |
+|   `auth_req`   | A string as per the target API login request format. The first and second `%s` entries are mapped to the username and password (or analogous secret token). |
 |   `auth_tok`   | The JSON node in the reply where to look for the token when authentication succeeds, as per the target API. It must start with a dot ("."). |
-|   `auth_var`   | The name of the global variable where to export the authentication token |
+|   `auth_var`   | The name of a variable to export with the authentication token |
 
- The following variables are used when set in the script or environment:
+ These variables are used when set in the script or environment:
 
-|    variable     |                           Defines                            |
-| :-------------: | :----------------------------------------------------------: |
-| `REST_USERNAME` |            The username to use for authentication            |
-| `REST_PASSWORD` | The pasword or analogous secret token to use for authentication |
+|    variable     |                        Defines                         |
+| :-------------: | :----------------------------------------------------: |
+| `REST_USERNAME` |         The username to use for authentication         |
+| `REST_PASSWORD` | The password or secret token to use for authentication |
 
-When either `REST_USERNAME` or `REST_PASSWORD` are unset, the script will prompt for them interactively (provided it detects a TTY) and stop until the information is entered.
+When either variable is unset, the script prompts interactively (if running on a TTY) and pauses until the information is entered.
 
-### usage
+### Usage
 
-Functions in `rest` can be used directly when calling the script by passing them as the first argument, so they can be thought of as subcommands. Useful subcommands are `enc`, `auth` and the autogenerated `req()` wrappers `post`, `get`, `put`, `delete`, `patch` and `postj`, `getj`, `putj`, `deletej`, `patchj`.
+Functions in `rest` can be used directly when calling the script by passing them as the first argument, so they can be seen as subcommands. Useful subcommands are `enc`, `auth` and the autogenerated `req()` wrappers: `post`, `get`, `put`, `delete`, `patch` and `postj`, `getj`, `putj`, `deletej`, `patchj`.
 
-#### `enc <format> <k=v> [k=v ...]`
+#### `rest enc <format> <k=v> [k=v ...]`
 
-Encodes a series of strings representing key=JSON pairs into the chosen format:
+Encode a series of strings representing key=JSON pairs into the chosen format:
 
 - `raw` format: outputs the raw input using `printf`
 -  `uri` format: encodes the input into a query string  
@@ -50,225 +72,411 @@ When using JSON formatting, all key=value input pairs are merged into a top leve
 
 - key and value should be separated by an equal (`=`) character, with no spaces around it
 - scalar values and dictionaries go through `jq -R @json` so any recursive formatting in dictionaries is done through this tool 
-- lists are explicitly recursive with their items processed separately after using the auxiliary function `comma_items()` to scan for the top level entries inside the currently processed list
+- lists are processed recursively. The auxiliary function `comma_items()` extracts top-level items inside the currently processed list before each item is individually type-checked and encoded.
 
-Since all scalar values are filtered through `jq`, proper type checking is done for all JSON types. Type checking and any other errors will fail parsing, as will any checks done by this subcommand. 
+Since all scalar values and dictionaries are filtered through jq and arrays recursed over, proper type checking is done for all JSON types. Typecheck errors from jq or this subcommand will fail parsing and abort any call. 
 
-To avoid brace expansion and any other shell mangling on the input, it is advised to wrap the outermost dictionaries in single quotes:
+To avoid brace expansion and other shell mangling on the input it is advised to wrap the outermost dictionaries in single quotes:
 
 ```bash
 ./dns01/rest enc json domain='{"extension":"com", "name":"test"}' type=master records=['{"name":"www","ttl":"900","type":"A","value":"1.2.3.4"}','{"name":"ftp","ttl":"900","type":"CNAME","value":"test.com"}']
 ```
 
-#### `auth [user] [pass]`
 
-Attempts simple HTTP authentication via POST and expects an authentication token as a result. The `auth_` configuration entries control this function's behavior.
 
-User name and password information can be passed as arguments or via `REST_USERNAME` and `REST_PASSWORD`. If these tokens aren't found in the arguments or the environment, the function will prompt for them on a console (provided a TTY is detected) and stop until they are entered.
+#### `rest auth [user] [pass]`
 
-#### `<post|get|put|delete|patch> [--raw] [k=v ...]`
+Attempt authentication via POST and return an authentication token.
 
-The request wrapper subcommands merely encode the HTTP method in their name so `req` receives it as an implicit parameter. There is also a second set of wrappers ending in `j` (`postj`, `getj`, `putj`, `deletej`, `patchj`) which pipe the response output to `jq`.
+User name and password can be passed as arguments or via `REST_USERNAME` and `REST_PASSWORD`. If the tokens aren't found in the arguments or the environment, the function will prompt for them on a console (provided a TTY is detected) and stop until they are entered.
 
-`req` performs the HTTP requests and if there are no errors, prints out the response. An authentication token is expected to be defined in `conf[auth_var]`, otherwise the function will call `auth` in an attempt to get a token prior to sending requests.
+On successful authentication, the returned authorization token will be printed on standard output, and if `conf[auth_var]` is set, exported in the variable whose name is there defined.
 
-The encoding format for `k=v` arguments is selected automatically depending on the method: JSON for post/put/patch and URI for get/delete. The `--raw` argument can be passed first to force that encoding.
+To use this in the current environment you can source the call:
 
-## `dns01`
-A script to assist with DNS01 ACME challenges.
+```bash
+source ./dns01/rest auth
+```
+Or, substitute the command:
+```bash
+export MY_TOKEN="$(./dns01/rest auth)"
+```
 
-`dns01` can:
+ 
 
-- generate the certificate material from scratch using `certbot`. Wildcard, apex and combo domains (apex+wildcard) are supported.
-- create the target A/AAAA records on target DNS APIs (currently only OpenProvider).
-- add robust DNS01 challenge detection, with the certificate material managed by clients or `certbot`. This is the operation mode used with lego/traefik, and it can support or be integrated with any client, such as for instance `cert-manager`.
+#### `rest <post|get|put|delete|patch> [--raw] [k=v ...]`
 
-### requirements
+The request wrapper subcommands merely encode the HTTP method in their name so that `req()` receives it as an implicit parameter, so they are there for purely ergonomic purposes. There is also a second set of wrappers (`postj`, `getj`, `putj`, `deletej`, `patchj`) that will pretty-print the response output by piping it through jq.
 
-`rest` script, `certbot` if using it for certificate generation
+`req()` performs the HTTP request and if there are no errors, prints out the response. An authentication token is expected to be defined in the variable pointed to by `conf[auth_var]`, otherwise the function will call `auth()` in an attempt to get a token prior to sending the requests.
 
-the code in the `common` script, should be made available at the same directory as this script
+##### method encoding
 
-### configuration
+The default encoding format for `k=v` arguments depends on the method in use:
+
+- POST, PUT, PATCH -> JSON encoding
+
+- GET, DELETE -> URI encoding
+
+The `--raw` argument can be passed first to force that format, essentially disabling encoding by the `rest` script. This is useful when encoding should be handled outside of the `rest` script.
+
+
+
+## `dns01/dns01`
+A script to assist with DNS-01 ACME challenges.
+
+**dns01** can:
+
+- generate the certificate material from scratch using certbot. Apex, wildcard and combo domains (apex+wildcard) are supported.
+- create the target A/AAAA records on target DNS APIs (currently only OpenProvider supported).
+- perform (robust) DNS-01 challenge detection, with the certificate material managed by clients or by certbot. This is used with Lego/Traefik and also supports integration with cert-manager or other clients.
+
+### Requirements
+
+- dnsutils
+- certbot (if using certificate generation)
+- the `dns01/rest` script
+- the `dns01/common` script
+
+### Configuration
 
 These entries are expected to be defined in a `conf` associative array:
 
-| `conf[]` entry |                           Defines                            |
-| :------------: | :----------------------------------------------------------: |
-|     `api`      |       Base URL to where requests are sent (target API)       |
-|   `auth_ep`    |     Authentication endpoint path component at target API     |
-|   `auth_req`   | A string as per the target API login request format. The first and second `%s` entries are mapped to the user name and password (or analogous secret token). |
-|   `auth_tok`   | The JSON node in the reply where to look for the token when authentication succeeds, as per the target API. It must start with a dot ("."). |
-|   `auth_var`   | The name of the global variable where to export the authentication token |
+|      `conf[]` entry      |                           Defines                            |
+| :----------------------: | :----------------------------------------------------------: |
+|      `rest_client`       |     The path to the `rest` script or equivalent program      |
+|      `acme_staging`      |              The URL of an ACME staging server               |
+|       `acme_live`        |                The URL of an ACME live server                |
+|       `acme_email`       |            The email to use for ACME registration            |
+|      `dns01_native`      |    Propagation detection - enable/disable native tracking    |
+|     `dns01_timeout`      |            Propagation detection - global timeout            |
+|     `dns01_backoff`      |         Propagation detection - initial backoff time         |
+|   `dns01_backoff_min`    |         Propagation detection - backoff lower bound          |
+|   `dns01_backoff_max`    |         Propagation detection - backoff higher bound         |
+|      `dns01_streak`      |    Propagation detection - enable/disable streak tracking    |
+| `dns01_streak_threshold` | Propagation detection - initial target streak to succeed tracking |
+|  `dns01_streak_penalty`  | Propagation detection - streak threshold penalization speed  |
+|    `dns01_streak_mod`    | Propagation detection - streak threshold penalization speed  |
 
- The following variables are used when set in the script or environment:
+ These variables are used when set in the script or environment:
 
-|    variable     |                           Defines                            |
-| :-------------: | :----------------------------------------------------------: |
-| `REST_USERNAME` |            The username to use for authentication            |
-| `REST_PASSWORD` | The pasword or analogous secret token to use for authentication |
+|         Variable         |      `conf[]` entry      |                            Values                            |
+| :----------------------: | :----------------------: | :----------------------------------------------------------: |
+|      `DNS01_NATIVE`      |      `dns01_native`      | `true`: fully disable lego semantics<br>`false`: fully enable lego semantics (can't be overriden)<br>`fallback`: try `false` behavior first otherwise `true` behavior<br/>(`DNS_*` variables can override)<br>`<any other value>`: enable lego semantics<br/>(`DNS_*` variables can override) |
+|     `DNS01_TIMEOUT`      |     `dns01_timeout`      | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
+|     `DNS01_BACKOFF`      |     `dns01_backoff`      | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
+|   `DNS01_BACKOFF_MIN`    |   `dns01_backoff_min`    | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
+|   `DNS01_BACKOFF_MAX`    |   `dns01_backoff_max`    | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
+|      `DNS01_STREAK`      |      `dns01_streak`      |                      `true` or `false`                       |
+| `DNS01_STREAK_THRESHOLD` | `dns01_streak_threshold` | `<integer value>`: set `conf[]` value<br>`<any other value>`: use `conf[]` value |
+|  `DNS01_STREAK_PENALTY`  |  `dns01_streak_penalty`  | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
+|    `DNS01_STREAK_MOD`    |    `dns01_streak_mod`    | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
 
-If either `REST_USERNAME` or `REST_PASSWORD` is unset, the script will prompt for them interactively (provided it detects a TTY) and stop until the information is entered.
+### Usage
 
-#### Internal configuration
+**dns01** supports different operation modes. This will be extended in following versions to be able to use parts of what is now the Certbot mode independently.
 
-##### Environment variables
+The hook modes deal only with propagation detection of the DNS-01 challenge record. They are called by Certbot or Traefik/Lego when they are used to create certificates and conduct the DNS-01 challenge. Again, in following versions this is where support for other certificate/DNS-01 brokers such as cert-manager will be added.
 
-|         Variable         |             Controls             |      `conf[]` entry      |                            Values                            |
-| :----------------------: | :------------------------------: | :----------------------: | :----------------------------------------------------------: |
-|      `DNS01_STREAK`      |     Adaptive streak tracking     |      `dns01_streak`      |                      `true` or `false`                       |
-| `DNS01_STREAK_THRESHOLD` |     Adaptive streak tracking     | `dns01_streak_threshold` | `<integer value>`: set `conf[]` value<br>`<any other value>`: use `conf[]` value |
-|  `DNS01_STREAK_PENALTY`  |     Adaptive streak tracking     | `dns01_streak__penalty`  | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
-|    `DNS01_STREAK_MOD`    |     Adaptive streak tracking     |    `dns01_streak_mod`    | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
-|     `DNS01_TIMEOUT`      |  Propagation detection timeout   |     `dns01_timeout`      | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
-|     `DNS01_BACKOFF`      | Adaptive backoff - initial value |     `dns01_backoff`      | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
-|   `DNS01_BACKOFF_MIN`    |  Adaptive backoff - lower bound  |   `dns01_backoff_min`    | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
-|   `DNS01_BACKOFF_MAX`    |  Adaptive backoff - upper bound  |   `dns01_backoff_max`    | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
-|      `DNS01_NATIVE`      |   Native propagation detection   |      `dns01_native`      | `true`: fully disable lego semantics<br>`false`: fully enable lego semantics (can't be overriden)<br>`fallback`: try `false` behavior first otherwise `true` behavior<br/>(`DNS_*` variables can override)<br>`<any other value>`: enable lego semantics<br/>(`DNS_*` variables can override) |
+Custom brokers can use the hook calls as desired, by following their usage documented below.
 
-#### Command line switches
+#### Certbot mode
+
+`dns01 [--create] [--addr <address> ...] [--combo] [--live] <domain>`
+
+In this mode Certbot creates the TLS certificate and handles DNS-01.
+
+By default the certificate will be issued for the specified domain, which can be an apex or a wildcard domain. If `--combo` is specified, a certificate will be issued for both the apex and wildcard domain, deriving the second entry from the specified domain.
+
+The Certbot mode defaults to using the ACME server defined in `conf[acme_staging]`. To use the server defined in `conf[acme_live]`, use the `--live` switch.
+
+This mode supports creating the actual A/AAAA target records in DNS before starting the DNS-01 challenge when the `--create` switch is present. At least one address must be also specified for the record with the `--addr` switch (this can be used many times for multiple address targets). Both IPv4 and IPv6 addresses are supported, and both types can be passed in the same call.
+
+> **Note**
+> `--create` is ignored if the specified domain is a wildcard domain
+
+#### Certbot hook mode
+
+`dns01 certbot_hook <add|del>`
+
+After Certbot starts the DNS-01 challenge, it will call **dns01** back to create (`add`) or delete (`del`) the TXT challenge record. After adding the record, the script will attempt propagation detection.
+
+The hook expects the target domain and DNS-01 challenge token to be defined in the `CERTBOT_DOMAIN` and `CERTBOT_VALIDATION` environment variables, as per Certbot semantics.
+
+#### Traefik/Lego hook mode
+
+`dns01 certbot_hook <present|cleanup> <domain> <token>`
+
+After Traefik/Lego start the DNS-01 challenge, it will call **dns01** back to create (`present`) or delete (`cleanup`) the TXT challenge record. After adding the record, the script will attempt propagation detection.
+
+The hook expects the target domain and DNS-01 challenge token to be passed on the command line, as per Lego `exec` specification in the arguments.
+
+> **Note**
+> Lego exec "raw" mode is not supported at this time
+
+### Adaptive propagation detection (the "native" mode)
+
+A DNS provider data plane can return flaky results (e.g. from anycast clusters with unpredictable zone updates), so **dns01**'s propagation detection will not trust a single test, *even when all authoritative servers did answer correctly*.
+
+If we succeed the challenge propagation only to have LetsEncrypt fail in the face of a flapped NXDOMAIN or stale record, we're in no better position as having had no propagation checks at all.
+
+Thus, `wait_propagation()` actively seeks to detect whether we're in presence of one of these worst cases, and works its way with inconsistent data planes to minimize the chance of false positives. This is done by tracking the data plane responses while it converges.
+
+How does this work exactly? We define the following:
+
+- **timeout**
+
+  How many seconds will pass until we give up and totally fail propagation detection
+
+- **successful probe**
+
+  **All** authoritative servers have returned the TXT challenge record. This may happen in a single pass or after multiple passes.
+
+- **failed probe**
+
+  At least **one** authoritative server has not returned the TXT challenge record.
+
+- **success streak**
+
+  Consecutive successful probes. This is a measure of confidence in the data plane having achieved convergence. Any failed probe will end the streak.
+
+- **streak length threshold**
+
+  How long a series of successful probes a success streak should cover, in order to trust the streak.
+
+- **length threshold penalization**
+
+  When a probe fails, the streak length threshold is raised, which means that *future success streaks must be stronger* in order to trust them. When the data plane appears to respond better, confidence will tend again to build faster.
+
+  How aggressively (or how often) we penalize the threshold is controlled by `conf[dns01_streak_mod]`. Lower values will penalize more often.
+
+- **streak time threshold**
+
+  How many seconds a success streak should extend to declare full confidence in the streak. Using a time threshold allows to correct for overly short or long streak length thresholds, improving confidence and response time.
+
+  The streak time threshold is not configurable yet, but will be in a future version.
+
+- **backoff time**
+
+  How long to wait between probes. This helps to avoid two things: throttling at the DNS provider (by probing too fast), and bad propagation detection times (by probing too slow).
+
+  The back-off time will move in a configurable window depending on whether the probes succeed (value is reduced), or fail (value is increased).
+  
+  Setting the low, high, and initial backoff times to the same value will disable backoff scaling and force a constant interval. See also [Lego behavior](#traefiklego-behaviors).  
+
+The final outcome is decided by whichever comes first:
+
+|                      Condition                      | Result  |
+| :-------------------------------------------------: | :-----: |
+| Streak tracking is disabled, and any probe succeeds | Success |
+|    The streak time and length thresholds are met    | Success |
+|    The streak time threshold is exceeded by 200%    | Success |
+|               The timeout is reached                | Failure |
 
 
-
-### Propagation detection
-
-#### Adaptive propagation detection
-
-DNS data planes can return flaky results (e.g. from anycast clusters with unpredictable zone updates), so we can't trust a single successful test, even with all authoritative servers having answered correctly.
-
-If we greenlight the challenge propagation only to have LetsEncrypt fail in the face of a flapped NXDOMAIN or stale record, we're in no better position as having had no propagation checks at all.
-
-Thus, the detection logic in the `wait_propagation` function actively tries to detect these worst cases, working with inconsistent data planes to minimize the chance of false positives.
-
-Upon a successful response by all authoritative servers, the process enters a **stabilization phase** where it searchs for *sustained streaks* of success until a stable time threshold is reached. The longer it takes reaching a stabilization phase, the less the data plane is trusted, and the function "penalizes" it with higher time threshold values.
-
-Streak lengths must also meet their own threshold: each time a stabilization phase *breaks* by a failed test, the next one might have to sustain a longer success streak. How often this penalization occurs is controlled via `conf[streak_penalty_mod]`.
-
-There is a bounded backoff time that slows down on falling trends and speeds up as we tend to better results.
-
-Ultimately, success depends on either:
-
-1) both time and streak thresholds being met, or
-2) the time threshold being surpassed by 200%
-
-Timing out before 1) or 2) becomes a failure. This might be configurable later, but for now a strict policy is the best defense line against false positives.
 
 #### Performance and reliability
 
-`dns01` is designed to handle DNS data planes that exhibit delayed or inconsistent propagation, but it cannot speed up the underlying DNS provider.
+`dns01` can work with DNS services showing delayed or inconsistent propagation, but it has no chance to affect in any way the time it takes for those services to converge.
 
-In environments such as OpenProvider, propagation delays and record flapping can occur when multiple TXT records for the same `_acme-challenge` name are created close together, whether from:
+With OpenProvider, propagation delays and record flapping were observed when multiple TXT records for the same `_acme-challenge` name are created rapidly, which can happen from things like:
 
 - Using the `--combo` option (multiple names in one certificate request)
-- Multiple concurrent or closely timed DNS-01 challenges for the same domain from different certificate requests
+- Multiple concurrent or closely timed challenges for the same domain from different certificate requests
 
-This is a property of the provider’s backend DNS servers that `dns01` can't avoid. The script’s propagation checker (`wait_propagation`) is designed to maximize the chance of success in poor conditions, but it may extend validation times significantly (10-20 minutes per record in extreme cases).
+The propagation detection logic attempts to maximize success rate and minimize resolution time under poor conditions, but this has the potential to raise validation times significantly (10-20 minutes per record in extreme cases).
 
-Possible mitigation routes for faster resolution:
+Possible mitigation routes are:
 
 - Avoid `--combo` for automation
 - Avoid concurrent or near-concurrent certificate requests for the same domain  
-- Use `conf[dns01_timeout]` and related configuration controls to set acceptable timeouts and backoff/streak behavior for your environment
+- Use `conf[dns01_timeout]` and related controls to set acceptable timeout, backoff and streak behavior for your environment
 
-#### Traefik/lego propagation detection
+#### Traefik/Lego behaviors
 
-In Traefik mode, the [lego library "exec" provider](https://go-acme.github.io/lego/dns/exec/) sets two environment variables with default values, or configuration from Traefik:
+In the Traefik hook flow, the Lego [`exec`](https://go-acme.github.io/lego/dns/exec/) provider sets two environment variables with default values:
 
 - `EXEC_POLLING_INTERVAL` - Time between DNS propagation check in seconds (Default: 3)
 - `EXEC_PROPAGATION_TIMEOUT` - Maximum waiting time for DNS propagation in seconds (Default: 60)
 
-These variables conform to a simpler propagation logic than that of `wait_propagation`. It uses fixed timeout and polling interval, with the first positive challenge resolution considered successful propagation.
-
-The lego variables map to native configuration like this:
+These variables conform to the Lego timeout/poll/first positive propagation detection. They map to **dns01** native configuration and behavior like follows:
 
 |   Traefik/Lego variable    |                        `conf[]` entry                        |                            Notes                             |
 | :------------------------: | :----------------------------------------------------------: | :----------------------------------------------------------: |
 | `EXEC_PROPAGATION_TIMEOUT` |                       `dns01_timeout`                        |                         1:1 mapping                          |
 |  `EXEC_POLLING_INTERVAL`   | `dns01_backoff`<br>`dns01_backoff_min`<br>`dns01_backoff_max` | The `backoff` variable in `wait_propagation` moves in the range, or can be set to a fixed interval |
-|             -              | `dns01_streak_threshold`<br>`dns01_streak_penalty`<br>`dns01_streak_mod`<br>`dns01_streak` | Dynamic time/length based streak tracking have no equivalent in Traefik. To follow its semantics `dns01_streak` should be set to `false`. |
+|             -              | `dns01_streak_threshold`<br>`dns01_streak_penalty`<br>`dns01_streak_mod`<br>`dns01_streak` | Dynamic time/length based streak tracking have no equivalent in Traefik. To follow its semantics `dns01_streak` must be set to `false`. |
 
-When called by Traefik, `dns01` strictly follows the lego model:
+**When running the Traefik hook**, `dns01` propagation detection semantics are controlled at a high level with the `DNS01_NATIVE` environment variable (default unset):
+
+|          value          |                            result                            |
+| :---------------------: | :----------------------------------------------------------: |
+|         `true`          |            Use dns01 native propagation detection            |
+|         `false`         |          Use Lego compatible propagation detection           |
+|       `fallback`        |             Try Lego first, fall back on native              |
+| unset / any other value | Like `false`, but `DNS01_STREAK`, `DNS01_TIMEOUT`, `DNS01_BACKOFF_MIN` and `DNS01_BACKOFF_MAX` can override behavior (see [Configuration)](#configuration). |
+
+When Lego compatible semantics are used:
 
 - `dns01_timeout` is set to `EXEC_PROPAGATION_TIMEOUT`
-- `dns01_backoff`, `dns01_backoff_min` and `dns01_backoff_max` are fixed to `EXEC_POLLING_INTERVAL`
-- adaptive streak tracking is disabled
+- `dns01_backoff`, `dns01_backoff_min` and `dns01_backoff_max` are all set to `EXEC_POLLING_INTERVAL`
+- `dns01_streak` is set to `false`, disabling streak tracking
 
-The environment variables `DNS01_STREAK`, `DNS01_TIMEOUT`, `DNS01_BACKOFF_MIN` and `DNS01_BACKOFF_MAX`, when set, allow overriding the lego configuration and propagation semantics with their own as described in [Configuration](#configuration).
-
-Additionally, the variable `DNS01_NATIVE` provides a shortcut to fully use lego or native mode:
-
-- When undefined or set to another value than `true` or `false`, the above rules apply
-- When set to `true`, drop lego compatibility and use the native propagation detection, honoring any `DNS01_*` variables
-- When set to `false`, ignore all `DNS01_*` variables, force strict mapping and full lego propagation detection
-- When set to `fallback`, attempt first the behaviors as if `false` were specified, and if that fails, behave as if `true` was specified
-
-**Note:** when using the lego detection but allowing backoff scaling, the scaling can only be **positive** (ie increased each time we poll negatively for propagation). There won't ever be a negative scaling, as the lego algorithm totally succeeds on the first positive reply.
+> **Note**
+> When using Lego detection but enabling backoff scaling, the scaling can only be **positive**, ie. increased on failed probes, as the first successful probe totally succeeds detection.
 
 
 
 ## `spool.sh`
 
-A generic, single-queue micro spool. It consists of a long-running function as the spooler and a synchronous function to write requests and read responses back. The spooler targets a single program, and a series of arguments are send via the spool files, with the first argument being "the command" sent to the target program. 
+A generic, single-queue micro spool written for POSIX. It consists of one long-running function working as the spooler daemon and one synchronous function that writes requests to and read responses back from the spool directory.
 
-This mechanism is used to set up `dns01` as a Traefik `exec` plugin, as described in its own section.
+The spooler is started targeting one program, and any requests along with their arguments are sent via the synchronous calls. When the spooler finds a new request, it reads all the arguments for its target and calls it in background. The background call waits for the target to return, and writes the exit status in a response file. 
 
-### requirements
-
-### configuration
-
-### usage
-
-
-
-## `entrypoint.sh`
-
-The Docker entry point, or just a front end script to control operating modes involving many components or steps.
+This is the mechanism used to set up **dns01** as a Traefik `exec` plugin as described in its own section, but can wrap any target command.
 
 ### requirements
 
+None
+
 ### configuration
+
+These variables are used when set in the script or environment:
+
+|    variable     |                       Defines                       |                           Default                            |
+| :-------------: | :-------------------------------------------------: | :----------------------------------------------------------: |
+|   `SPOOL_JOB`   |                 The target command                  |                         `/bin/false`                         |
+|   `SPOOL_DIR`   | The directory to use for the request/response files | A `/spool` subdirectory relative to the path of the script instance |
+| `SPOOL_TIMEOUT` |   Seconds before giving up and returning an error   |                            `1500`                            |
 
 ### usage
 
-# How to set up and use this code
+`spool.sh help`
+
+Shows online help
+
+`spool.sh daemon`
+
+Starts the spool daemon
+
+`spool.sh [args ...]`
+
+Sends a request to call the target program, forwarding any arguments in the call. Returns 1 if `SPOOL_TIMEOUT` is reached, or the exit code of the target program. This is a standard synchronous, blocking command.
+
+
+
+## `entrypoint`
+
+This is a standard frontend script supporting the different container operation modes, used as the Dockerfile ENTRYPOINT.
+
+### requirements
+
+- Bash 4
+- The `dns01` and `spool.sh` scripts
+
+### configuration and usage
+
+The variable `DNS01_PATH` should point to this repository. Refer to [Docker image](#docker-image) below for full details.
+
+# Set up and deployment
 
 ## Standalone use
 
-The requirements for using the scripts directly are listed in the section about **Components**. Add the `dns01` subdirectory in this repo to your `PATH` (advised) or call the scripts there directly. The code will determine its real location at call time when necessary and find its own components.
+Add the `dns01` subdirectory in this repo to your `PATH` (advised) or call the scripts there directly. The code will determine its filesystem location and find its own components when necessary. The `rest` and `spool.sh` scripts can be used independently.
 
-The `rest` and `spool.sh` scripts can be used independently provided any requirements are met.
+All the details on setting up and using the different scripts are found in their own [sections](#Components).
 
-##  Docker image
+## Docker image
 
-The docker image uses `entrypoint.sh` to control the operation mode. The mode is selected with the `DNS01_MODE` environment variable.
+The repository includes a Dockerfile that builds a self-contained container image with all the files in this repository and the necessary dependencies.
 
+### Building the image
 
+From the repository root:
+
+```
+docker build -t ghcr.io/you/dns01:latest .
+```
+
+(Adjust the tag to whatever registry/namespace you use.)
+
+### Running locally
+
+Idle mode:
+
+```
+docker run --rm -e DNS-01_MODE=idle ghcr.io/you/dns01:latest
+```
+
+Spool worker:
+
+```
+docker run --rm \
+  -e DNS-01_MODE=spool \
+  -e SPOOL_DIR=/var/spool/dns01 \
+  -e SPOOL_JOB=/opt/dns01/dns01 \
+  -v "$(pwd)/spool:/var/spool/dns01" \
+  ghcr.io/you/dns01:latest
+```
+
+In this example:
+
+- The host directory `./spool` is mounted into the container as `/var/spool/dns01`.
+- A producer process (another container or a host script) can write jobs into that directory using the same spool protocol as `spool.sh` (request/response files with base64-encoded argv).
+- The dns01 container processes those jobs using the `dns01` script as `SPOOL_JOB`.
+
+### Entrypoint and modes
+
+The Docker image ships with an opinionated `entrypoint` script that selects the runtime behavior based on the `DNS01_MODE` environment variable.
+
+At the moment only `idle` and `spool` modes are implemented. Other modes are reserved for future work and will exit with a non-zero status.
+
+#### idle mode (default)
+
+This is a test mode that just loops and does nothing except logging a message
+
+#### spool mode
+
+This mode runs a `spool.sh` worker targeting `dns01`:
+
+- `spool.sh` is run in daemon mode, watching a spool directory
+- each spooled request is expected to contain one command line to be passed to a `dns01` execution
+
+The `DNS01_SPOOL` variable should point to a directory that will be used for the spool. If unset, the value of `SPOOL_DIR` is used - unless it's also unset, in which case `DNS01_PATH `will be used as the fallback default.
+
+The entry point attempts to create the spool directory that `spool.sh` will use, depending on whether `DNS01_SPOOL` and  `SPOOL_DIR` are defined.
 
 ## Traefik plugin
 
-The following instructions are aimed at Traefik deployments with the official Helm chart. If your setup differs please adjust the definitions accordingly.
+The instructions here are intended for Traefik deployments with the [official Helm chart](https://github.com/traefik/traefik-helm-chart). If your setup differs you will have to adjust accordingly.
 
-As of now the Traefik interface is implemented as an `exec` plugin, until a long-lived listener is developed which will enable using the `httpreq` plugin. The strategy for `exec` is to spawn the `dns01` image as a sidecar in spooled mode, and dispatch the requests by calling the synchronous spool interface from the Traefik container via a shared volume.
+At present the Traefik interface is deployed as an `exec` plugin. There are two main ways to do this:
 
-We avoid defining `SPOOL_DIR` (the actual spool directory), but ensure that it exists and has proper authorization for the Traefik `exec `plugin. Thus we use the default at `spool.sh`, which targets a `/spool` subdirectory relative to its own path, for which we ensure that both the Docker entrypoint and the Traefik `EXEC_PATH` point to the same location.
+- Use a Traefik image where **dns01** is included, and provide a writable location for the spool directory.
 
-### 1) set up the shared volume
+- Use the original Traefik image, spawn the **dns01** image in spool mode as a sidecar, and dispatch the requests by calling the synchronous spool interface on the Traefik container using a shared volume. 
+
+  This is the strategy documented here.
+
+We avoid defining `SPOOL_DIR` (the actual spool directory), and rely on the [defaults in `spool.sh`](#configuration-2) targeting a spool subdirectory under its own exec path. For this to work, both the Traefik `EXEC_PATH` and the entry point call *must use the same path*.
+
+### 1) Set up the shared volume and spool directory
+
+Define the volume and mount on the Traefik container:
 
 ```yaml
 additionalVolumes:
  - name: acme-scripts
    mountPath: /acme-scripts
    readOnly: false 
-```
-
-```yaml
+   
 additionalVolumeMounts:
   - name: acme-scripts
     mountPath: /acme-scripts
-    readOnly: false
+    readOnly: false   
 ```
 
-Ensure ownership and permissions for the Traefik process:
+Although the entry point attempts to create the spool directory if it doesn't exist, the bulletproof way to prevent authorization issues with Traefik is to do this on a root init container:
 
 ```yaml
 initContainers:
@@ -293,12 +501,12 @@ initContainers:
         mountPath: /acme-scripts
 ```
 
-### 2) set up the spooled `dns01` as a sidecar 
+### 2) Set up **dns01** as a sidecar in spooled mode 
 
 ```yaml
 additionalContainers:
-  - name: dns01
-    image: ghcr.io/3coma3/dns01:latest
+  - name: onestein-dns01
+    image: ghcr.io/onesteinbv/dns01:latest
     imagePullPolicy: Always
     volumeMounts:
       - name: acme-scripts
@@ -315,15 +523,15 @@ additionalContainers:
         secretKeyRef:
           name: traefik
           key: openprovider_password
-    - name: DNS01_MODE
+    - name: DNS-01_MODE
       value: spool
-    - name: DNS01_SPOOL
+    - name: DNS-01_SPOOL
       value: /acme-scripts
-    - name: DNS01_NATIVE
+    - name: DNS-01_NATIVE
       value: "true" 
 ```
 
-### 3) set up the synchronous spool interface as a Traefik `exec` plugin
+### 3) Set up the spool interface as an `exec` plugin
 
 ```yaml
 env:
@@ -342,4 +550,7 @@ certificatesResolvers:
         disablePropagationCheck: true
 ```
 
-**note**: in this case, `/data` is a persistent volume. Refer to the Traefik documentation on ACME certificate stores for more information.
+> **Notes**
+>
+> -  `/data` is a persistent volume for the certificate store. Please refer to the Traefik [documentation on ACME](https://doc.traefik.io/traefik/reference/install-configuration/tls/certificate-resolvers/acme/) for more information.
+> - When using the **dns01** native propagation checks (`DNS01_NATIVE=true`), disable the Lego checks on the certificate resolver with `disablePropagationCheck: true`. See [Usage](#usage-1) and [Notes](#adaptive-propagation-detection-the-native-mode) for details.
