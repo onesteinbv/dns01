@@ -48,7 +48,7 @@ The docker image uses entrypoint.sh to control the operation mode. The mode is s
 
 ### Traefik plugin
 
-These are instructions intended for Traefik installations using the official Helm chart. The script must be used for now as a Traefik `exec` plugin, until a long-lived listener added which will enable using the `httpreq` plugin. 
+These are instructions intended for Traefik installations using the [https://github.com/traefik/traefik-helm-chart](official Helm chart). The script must be used for now as a Traefik `exec` plugin, until a long-lived listener added which will enable using the `httpreq` plugin. 
 
 #### Set up the spool directory
 
