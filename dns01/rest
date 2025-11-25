@@ -130,7 +130,7 @@ go() {
   for verb in post get put delete patch; do
     IFS= read -rd '' verb <<VERB
  ${verb}() { req "\$@"; }
-${verb}j() { req "\$@" | jq; }
+${verb}j() { $verb "\$@" | jq; }
 VERB
     eval "$verb"
   done
