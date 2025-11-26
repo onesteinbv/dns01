@@ -8,10 +8,13 @@ SPOOL_TIMEOUT="${SPOOL_TIMEOUT:-1500}"
 
 # synchronous spool client
 send_job() {
-  CMD="$1"; shift
-
   JOB_ID="$(date +%s)-$$"
-  { echo "$CMD"; for ARG in "$@"; do printf '%s\n' "$ARG"; done; } > "$SPOOL_DIR/$JOB_ID.request"
+  {
+    for ARG in "$@"; do
+      printf '%s' "$ARG" | base64 | tr -d '\n'
+      echo
+    done
+  } > "$SPOOL_DIR/$JOB_ID.request"
 
   RESPONSE="$SPOOL_DIR/$JOB_ID.response"
   i="$SPOOL_TIMEOUT"
@@ -40,14 +43,18 @@ daemon() {
     for REQUEST in "$SPOOL_DIR"/*.request; do
       [ -e "$REQUEST" ] || continue
 
-      CMD= ARGS=
-      { read -r CMD && ARGS="$(cat)"; } < "$REQUEST"
-
       export JOB_ID="$(basename "$REQUEST" .request)"
-      echo "[spool] dispatching asynchronous job id=$JOB_ID (command: \"$CMD\")"
 
-      set -- $ARGS
-      ( "$SPOOL_JOB" "$CMD" "$@"; echo "$?" > "$SPOOL_DIR/$JOB_ID.response") &
+      set --
+      {
+        while IFS= read -r ARG; do
+          set -- "$@" "$(printf '%s' "$ARG" | base64 -d)"
+        done
+      } < "$REQUEST"
+
+      echo "[spool] dispatching asynchronous job id=$JOB_ID (command: $SPOOL_JOB $*)"
+
+      ( "$SPOOL_JOB" "$@"; echo "$?" > "$SPOOL_DIR/$JOB_ID.response") &
       rm -f "$REQUEST"
     done
   done
@@ -57,13 +64,13 @@ help() {
   cat <<EOF
 Usage:
   $0 help
-      Show this help.
+    Show this help.
 
   $0 daemon
-      Start the long-lived spool process.
+    Start the long-lived spool process.
 
-  $0 <job command> [job args...]
-      Synchronously enqueue a job and return its exit status.
+  $0 [job args...]
+    Synchronously enqueue a job forwarding any arguments, and return its exit status.
 EOF
   exit 2
 }
