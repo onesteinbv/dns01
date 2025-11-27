@@ -118,7 +118,7 @@ auth() {
   json="$(post "${conf[auth_ep]}" "${req[@]}")" || return $?
   token="$(jq -er "${conf[auth_tok]}" <<< "$json")" || err parse "Could not extract token"
 
-  declare -gx "${conf[auth_var]}"="$token"
+  [[ -v conf[auth_var] ]] && declare -gx "${conf[auth_var]}"="$token"
   [[ $client != 'req' ]] && printf '%s' "$token"
 
   return 0
