@@ -1,21 +1,22 @@
 # Overview
 
-The Lego library powers ACME negotiation in Traefik, and includes a set of drivers for DNS providers enabling their use with the DNS-01 challenge. For those providers lacking native drivers targeting their API, Lego offers two generic ones that can be used to glue the support in: [exec](https://go-acme.github.io/lego/dns/exec/index.html) and [httpreq](https://go-acme.github.io/lego/dns/httpreq/index.html). This was the case with OpenProvider when integrating DNS-01 with Traefik, which motivated starting this project.
+The [lego](https://go-acme.github.io/lego/) library powers ACME negotiation in Traefik, and includes a collection of drivers for DNS providers enabling their use with the DNS-01 challenge. For providers lacking native drivers, it offers two generic ones that can be used to glue the support in: [exec](https://go-acme.github.io/lego/dns/exec/index.html) and [httpreq](https://go-acme.github.io/lego/dns/httpreq/index.html). This was the case with Openprovider when integrating DNS-01 with Traefik, which motivated the start of this project.
 
-Development and testing were done interactively using the certbot utility to manage the certificates and perform the challenges, with a bit of Bash code to wrap the certbot calls and provide the ***challenge hooks***. These are handlers that Lego/Traefik or certbot will call to create the TXT records that an ACME server like LetsEncrypt will fetch to validate the DNS-01 challenge.
+Initial testing and development were done interactively using certbot to manage certificates and perform challenges, with a Bash wrapper providing **challenge hooks**: handlers that lego/Traefik or certbot call to create TXT records that an ACME server such as Let’s Encrypt will query to validate DNS-01 challenges.
 
-While testing the hook code it was found that certbot does not verify that the newly created TXT record has propagated on the DNS data plane before returning control to ACME, meaning that any checks are expected to be done before the hook returns.
+While working with the hook code it was found that:
 
-With Lego/Traefik the situation isn't much better. There is an optimistic poll with back-off and timeout, that greenlits the ACME server *on the first successful response*. With OpenProvider, this logic caused the DNS-01 challenges to fail in a [number of scenarios](#adaptive-propagation-detection-the-native-mode).
+- Certbot does not verify that the newly created TXT record has propagated through the DNS data plane before returning control to ACME, meaning any propagation checks must be performed before the hook returns.
+- With lego/Traefik, an optimistic polling with backoff and timeout greenlights ACME as soon as the first positive lookup is received. In the case of Openprovider, this detection logic caused DNS-01 validations to fail in a [number of scenarios](#adaptive-propagation-detection-the-native-mode).
 
-Thus, efforts were focused on trying to improve the guarantees on the TXT record convergence in the shortest possible time: after the hook requests the TXT record creation, it will start polling all the authoritative servers testing for *streaks* of positive probes while (like Lego), avoiding throttling by refraining from polling too fast. The streak thresholds and backoffs are adaptive, and change depending on whether DNS shows “good” or “bad” convergence.
+The main effort therefore focused on improving the guarantees of TXT record convergence in the shortest possible time. After the hooks request TXT creation, all authoritative servers are polled for **streaks** of positive replies. Success thresholds and backoff intervals are adaptive and change depending on whether DNS shows “good” or “bad” convergence.
 
-The remaining pieces are basically K8S integration, and you will find all the details in this documentation about how to use this with Traefik. Future development is going to focus on making **dns01** useful in more diverse scenarios:
+The other missing piece was Kubernetes integration, covered in detail later in this documentation (particularly for Traefik). Upcoming development will focus on making **dns01** more broadly useful:
 
-- support other DNS providers by reusing the Lego drivers and/or add a native plugin system
-- support other clients besides K8S/Traefik such as cert-manager, or custom workflows
-- Argo stack integration
-- have as many components able to be used fully independently (target A/AAA creation, propagation detection, etc.)
+-  support additional DNS providers (via lego drivers or a native plugin system)
+- support more ACME clients besides lego/Traefik, such as cert-manager or custom workflows
+- deeper integration with the Argo ecosystem
+- make the internal components usable independently (A/AAAA target creation, propagation detection, etc.)
 
 # Components
 
@@ -128,8 +129,8 @@ A script to assist with DNS-01 ACME challenges.
 **dns01** can:
 
 - generate the certificate material from scratch using certbot. Apex, wildcard and combo domains (apex+wildcard) are supported.
-- create the target A/AAAA records on target DNS APIs (currently only OpenProvider supported).
-- perform (robust) DNS-01 challenge detection, with the certificate material managed by clients or by certbot. This is used with Lego/Traefik and also supports integration with cert-manager or other clients.
+- create the target A/AAAA records on target DNS APIs (currently only Openprovider supported).
+- perform (robust) DNS-01 challenge detection, with the certificate material managed by clients or by certbot. This is used with lego/Traefik and also supports integration with cert-manager or other clients.
 
 ### Requirements
 
@@ -176,7 +177,7 @@ These entries are expected to be defined in a `conf` associative array:
 
 **dns01** supports different operation modes. This will be extended in following versions to be able to use parts of what is now the Certbot mode independently.
 
-The hook modes deal only with propagation detection of the DNS-01 challenge record. They are called by Certbot or Traefik/Lego when they are used to create certificates and conduct the DNS-01 challenge. Again, in following versions this is where support for other certificate/DNS-01 brokers such as cert-manager will be added.
+The hook modes deal only with propagation detection of the DNS-01 challenge record. They are called by Certbot or Traefik/lego when they are used to create certificates and conduct the DNS-01 challenge. Again, in following versions this is where support for other certificate/DNS-01 brokers such as cert-manager will be added.
 
 Custom brokers can use the hook calls as desired, by following their usage documented below.
 
@@ -203,22 +204,22 @@ After Certbot starts the DNS-01 challenge, it will call **dns01** back to create
 
 The hook expects the target domain and DNS-01 challenge token to be defined in the `CERTBOT_DOMAIN` and `CERTBOT_VALIDATION` environment variables, as per Certbot semantics.
 
-#### Traefik/Lego hook mode
+#### Traefik/lego hook mode
 
 `dns01 certbot_hook <present|cleanup> <domain> <token>`
 
-After Traefik/Lego start the DNS-01 challenge, it will call **dns01** back to create (`present`) or delete (`cleanup`) the TXT challenge record. After adding the record, the script will attempt propagation detection.
+After Traefik/lego start the DNS-01 challenge, it will call **dns01** back to create (`present`) or delete (`cleanup`) the TXT challenge record. After adding the record, the script will attempt propagation detection.
 
-The hook expects the target domain and DNS-01 challenge token to be passed on the command line, as per Lego `exec` specification in the arguments.
+The hook expects the target domain and DNS-01 challenge token to be passed on the command line, as per lego `exec` specification in the arguments.
 
 > **Note**
-> Lego exec "raw" mode is not supported at this time
+> lego exec "raw" mode is not supported at this time
 
 ### Adaptive propagation detection (the "native" mode)
 
 A DNS provider data plane can return flaky results (e.g. from anycast clusters with unpredictable zone updates), so **dns01**'s propagation detection will not trust a single test, *even when all authoritative servers did answer correctly*.
 
-If we succeed the challenge propagation only to have LetsEncrypt fail in the face of a flapped NXDOMAIN or stale record, we're in no better position as having had no propagation checks at all.
+If we succeed the challenge propagation only to have Let's Encrypt fail in the face of a flapped NXDOMAIN or stale record, we're in no better position as having had no propagation checks at all.
 
 Thus, `wait_propagation()` actively seeks to detect whether we're in presence of one of these worst cases, and works its way with inconsistent data planes to minimize the chance of false positives. This is done by tracking the data plane responses while it converges.
 
@@ -262,7 +263,7 @@ How does this work exactly? We define the following:
 
   The back-off time will move in a configurable window depending on whether the probes succeed (value is reduced), or fail (value is increased).
   
-  Setting the low, high, and initial backoff times to the same value will disable backoff scaling and force a constant interval. See also [Lego behavior](#traefiklego-behaviors).  
+  Setting the low, high, and initial backoff times to the same value will disable backoff scaling and force a constant interval. See also [lego behavior](#traefiklego-behaviors).  
 
 The final outcome is decided by whichever comes first:
 
@@ -279,7 +280,7 @@ The final outcome is decided by whichever comes first:
 
 `dns01` can work with DNS services showing delayed or inconsistent propagation, but it has no chance to affect in any way the time it takes for those services to converge.
 
-With OpenProvider, propagation delays and record flapping were observed when multiple TXT records for the same `_acme-challenge` name are created rapidly, which can happen from things like:
+With Openprovider, propagation delays and record flapping were observed when multiple TXT records for the same `_acme-challenge` name are created rapidly, which can happen from things like:
 
 - Using the `--combo` option (multiple names in one certificate request)
 - Multiple concurrent or closely timed challenges for the same domain from different certificate requests
@@ -292,16 +293,16 @@ Possible mitigation routes are:
 - Avoid concurrent or near-concurrent certificate requests for the same domain  
 - Use `conf[dns01_timeout]` and related controls to set acceptable timeout, backoff and streak behavior for your environment
 
-#### Traefik/Lego behaviors
+#### Traefik/lego behaviors
 
-In the Traefik hook flow, the Lego [`exec`](https://go-acme.github.io/lego/dns/exec/) provider sets two environment variables with default values:
+In the Traefik hook flow, the lego [`exec`](https://go-acme.github.io/lego/dns/exec/) provider sets two environment variables with default values:
 
 - `EXEC_POLLING_INTERVAL` - Time between DNS propagation check in seconds (Default: 3)
 - `EXEC_PROPAGATION_TIMEOUT` - Maximum waiting time for DNS propagation in seconds (Default: 60)
 
-These variables conform to the Lego timeout/poll/first positive propagation detection. They map to **dns01** native configuration and behavior like follows:
+These variables conform to the lego timeout/poll/first positive propagation detection. They map to **dns01** native configuration and behavior like follows:
 
-|   Traefik/Lego variable    |                        `conf[]` entry                        |                            Notes                             |
+|   Traefik/lego variable    |                        `conf[]` entry                        |                            Notes                             |
 | :------------------------: | :----------------------------------------------------------: | :----------------------------------------------------------: |
 | `EXEC_PROPAGATION_TIMEOUT` |                       `dns01_timeout`                        |                         1:1 mapping                          |
 |  `EXEC_POLLING_INTERVAL`   | `dns01_backoff`<br>`dns01_backoff_min`<br>`dns01_backoff_max` | The `backoff` variable in `wait_propagation` moves in the range, or can be set to a fixed interval |
@@ -312,18 +313,18 @@ These variables conform to the Lego timeout/poll/first positive propagation dete
 |          value          |                            result                            |
 | :---------------------: | :----------------------------------------------------------: |
 |         `true`          |            Use dns01 native propagation detection            |
-|         `false`         |          Use Lego compatible propagation detection           |
-|       `fallback`        |             Try Lego first, fall back on native              |
+|         `false`         |          Use lego compatible propagation detection           |
+|       `fallback`        |             Try lego first, fall back on native              |
 | unset / any other value | Like `false`, but `DNS01_STREAK`, `DNS01_TIMEOUT`, `DNS01_BACKOFF_MIN` and `DNS01_BACKOFF_MAX` can override behavior (see [Configuration)](#configuration). |
 
-When Lego compatible semantics are used:
+When lego compatible semantics are used:
 
 - `dns01_timeout` is set to `EXEC_PROPAGATION_TIMEOUT`
 - `dns01_backoff`, `dns01_backoff_min` and `dns01_backoff_max` are all set to `EXEC_POLLING_INTERVAL`
 - `dns01_streak` is set to `false`, disabling streak tracking
 
 > **Note**
-> When using Lego detection but enabling backoff scaling, the scaling can only be **positive**, ie. increased on failed probes, as the first successful probe totally succeeds detection.
+> When using lego detection but enabling backoff scaling, the scaling can only be **positive**, ie. increased on failed probes, as the first successful probe totally succeeds detection.
 
 
 
@@ -395,7 +396,7 @@ The repository includes a Dockerfile that builds a self-contained container imag
 From the repository root:
 
 ```
-docker build -t ghcr.io/you/dns01:latest .
+docker build -t ghcr.io/onestein/dns01:latest .
 ```
 
 (Adjust the tag to whatever registry/namespace you use.)
@@ -405,7 +406,7 @@ docker build -t ghcr.io/you/dns01:latest .
 Idle mode:
 
 ```
-docker run --rm -e DNS-01_MODE=idle ghcr.io/you/dns01:latest
+docker run --rm -e DNS-01_MODE=idle ghcr.io/onestein/dns01:latest
 ```
 
 Spool worker:
@@ -416,7 +417,7 @@ docker run --rm \
   -e SPOOL_DIR=/var/spool/dns01 \
   -e SPOOL_JOB=/opt/dns01/dns01 \
   -v "$(pwd)/spool:/var/spool/dns01" \
-  ghcr.io/you/dns01:latest
+  ghcr.io/onestein/dns01:latest
 ```
 
 In this example:
@@ -553,4 +554,4 @@ certificatesResolvers:
 > **Notes**
 >
 > -  `/data` is a persistent volume for the certificate store. Please refer to the Traefik [documentation on ACME](https://doc.traefik.io/traefik/reference/install-configuration/tls/certificate-resolvers/acme/) for more information.
-> - When using the **dns01** native propagation checks (`DNS01_NATIVE=true`), disable the Lego checks on the certificate resolver with `disablePropagationCheck: true`. See [Usage](#usage-1) and [Notes](#adaptive-propagation-detection-the-native-mode) for details.
+> - When using the **dns01** native propagation checks (`DNS01_NATIVE=true`), disable the lego checks on the certificate resolver with `disablePropagationCheck: true`. See [Usage](#usage-1) and [Notes](#adaptive-propagation-detection-the-native-mode) for details.

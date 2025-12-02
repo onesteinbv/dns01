@@ -1,4 +1,4 @@
-These are tools to handle DNS-01 ACME challenges with a focus on Traefik (Lego), OpenProvider, and Kubernetes deployments.
+A toolkit to handle DNS-01 ACME challenges with a focus on Traefik (lego), Openprovider, and Kubernetes deployments.
 
 # Features
 
@@ -11,7 +11,7 @@ These are tools to handle DNS-01 ACME challenges with a focus on Traefik (Lego),
 
 ## Standalone operation
 
-`dns01` can run alongside certificate brokers such as Lego/Traefik, or operate standalone in custom workflows:
+`dns01` can run alongside certificate brokers such as lego/Traefik, or operate standalone in custom workflows:
 
 - certificate generation (via certbot)
 - creating A/AAAA target records
@@ -26,9 +26,35 @@ These are tools to handle DNS-01 ACME challenges with a focus on Traefik (Lego),
 
 A Dockerfile and image are provided, along with instructions for Traefik/Kubernetes and other uses.
 
-# How to set up and use this code
+# Quickstart
 
-Please head to the [documentation section](doc/Documentation.md#set-up-and-deployment) for quick installation instructions.
+### Build and run the container
+
+At the root of this repository:
+```bash
+docker build -t ghcr.io/onestein/dns01:latest .
+
+docker run --rm \
+  -u $UID \
+  -e REST_USERNAME=<your Openprovider username> \
+  -e REST_PASSWORD=<your Openprovider password> \
+  -e DNS01_MODE=spool \
+  -e DNS01_SPOOL=/spool \
+  -v  "$(pwd):/spool" ghcr.io/onestein/dns01:latest
+```
+
+The container will start in **spool mode**, watching a `spool/` subdirectory of the current directory for DNS-01 requests.
+
+### Test a DNS-01 challenge
+
+`./spool.sh some.domain.you.own`
+
+The domain should belong in a zone that you own. Challenges will be attempted using the Let's Encrypt staging server.
+
+# Kubernetes deployment
+
+See [Documentation -> Set up and deployment](doc/Documentation.md#set-up-and-deployment) for quick instructions on deploying on Kubernetes.
+
 
 # License
 
