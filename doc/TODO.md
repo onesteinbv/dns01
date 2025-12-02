@@ -25,7 +25,7 @@
  - ~~have the spooler preserve multi-word arguments~~
         
 #### priority bucket 1 - initial release
-- finish initial doc
+- ~~finish initial doc~~
   - ~~dns01~~
   - ~~spool.sh~~
   - ~~entrypoint~~
@@ -34,12 +34,13 @@
   - ~~TODO~~
 
 - GH
-  - repo meta
-  - license
-  - packaging
+  - ~~repo meta~~
+  - ~~license~~
+  - ~~packaging~~
   - deps
   - compatibility notes
-  - versioning, releases
+  - move TODO to projects
+  - ~~versioning, releases~~
 
 #### priority bucket 2 - improvements + refactor for phase 2
 - sanitize logs, redact any sensitive information such as authorization headers
