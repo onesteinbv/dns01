@@ -175,7 +175,7 @@ These entries are expected to be defined in a `conf` associative array:
 
 ### Usage
 
-**dns01** supports different operation modes. This will be extended in following versions to be able to use parts of what is now the Certbot mode independently.
+**dns01** supports different operation modes. This will be extended in following versions to be able to independently use parts of what is now the [Certbot mode](#certbot-mode).
 
 The hook modes deal only with propagation detection of the DNS-01 challenge record. They are called by Certbot or Traefik/lego when they are used to create certificates and conduct the DNS-01 challenge. Again, in following versions this is where support for other certificate/DNS-01 brokers such as cert-manager will be added.
 
@@ -291,7 +291,7 @@ Possible mitigation routes are:
 
 - Avoid `--combo` for automation
 - Avoid concurrent or near-concurrent certificate requests for the same domain  
-- Use `conf[dns01_timeout]` and related controls to set acceptable timeout, backoff and streak behavior for your environment
+- Use the detection knobs to set acceptable timeout, backoff and streak behavior for your environment
 
 #### Traefik/lego behaviors
 
@@ -306,13 +306,13 @@ These variables conform to the lego timeout/poll/first positive propagation dete
 | :------------------------: | :----------------------------------------------------------: | :----------------------------------------------------------: |
 | `EXEC_PROPAGATION_TIMEOUT` |                       `dns01_timeout`                        |                         1:1 mapping                          |
 |  `EXEC_POLLING_INTERVAL`   | `dns01_backoff`<br>`dns01_backoff_min`<br>`dns01_backoff_max` | The `backoff` variable in `wait_propagation` moves in the range, or can be set to a fixed interval |
-|             -              | `dns01_streak_threshold`<br>`dns01_streak_penalty`<br>`dns01_streak_mod`<br>`dns01_streak` | Dynamic time/length based streak tracking have no equivalent in Traefik. To follow its semantics `dns01_streak` must be set to `false`. |
+|             -              | `dns01_streak`<br />`dns01_streak_threshold`<br>`dns01_streak_penalty`<br>`dns01_streak_mod` | Dynamic time/length based streak tracking have no equivalent in Traefik. To follow its semantics `dns01_streak` must be set to `false`. |
 
-**When running the Traefik hook**, `dns01` propagation detection semantics are controlled at a high level with the `DNS01_NATIVE` environment variable (default unset):
+**When running the Traefik hook**, propagation detection semantics are controlled at a high level with the `DNS01_NATIVE` environment variable (default unset):
 
 |          value          |                            result                            |
 | :---------------------: | :----------------------------------------------------------: |
-|         `true`          |            Use dns01 native propagation detection            |
+|         `true`          |               Use native propagation detection               |
 |         `false`         |          Use lego compatible propagation detection           |
 |       `fallback`        |             Try lego first, fall back on native              |
 | unset / any other value | Like `false`, but `DNS01_STREAK`, `DNS01_TIMEOUT`, `DNS01_BACKOFF_MIN` and `DNS01_BACKOFF_MAX` can override behavior (see [Configuration)](#configuration). |
@@ -324,23 +324,24 @@ When lego compatible semantics are used:
 - `dns01_streak` is set to `false`, disabling streak tracking
 
 > **Note**
-> When using lego detection but enabling backoff scaling, the scaling can only be **positive**, ie. increased on failed probes, as the first successful probe totally succeeds detection.
+> When using lego detection but enabling backoff scaling, the scaling can only be **positive**, ie. increased on failed probes, since the first successful probe totally succeeds detection.
 
 
 
 ## `spool.sh`
 
-A generic, single-queue micro spool written for POSIX. It consists of one long-running function working as the spooler daemon and one synchronous function that writes requests to and read responses back from the spool directory.
+A generic, single-queue micro spool written for POSIX. It consists of one long-running function working as the spooler daemon and one synchronous function that writes requests to and reads responses back from the spool directory.
 
 The spooler is started targeting one program, and any requests along with their arguments are sent via the synchronous calls. When the spooler finds a new request, it reads all the arguments for its target and calls it in background. The background call waits for the target to return, and writes the exit status in a response file. 
 
-This is the mechanism used to set up **dns01** as a Traefik `exec` plugin as described in its own section, but can wrap any target command.
+This is the [mechanism](#traefik-plugin) used to set up **dns01** as a Traefik `exec` plugin, but it can wrap any target command.
 
-### requirements
+### Requirements
 
-None
+- base64
+- tr
 
-### configuration
+### Configuration
 
 These variables are used when set in the script or environment:
 
@@ -350,11 +351,11 @@ These variables are used when set in the script or environment:
 |   `SPOOL_DIR`   | The directory to use for the request/response files | A `/spool` subdirectory relative to the path of the script instance |
 | `SPOOL_TIMEOUT` |   Seconds before giving up and returning an error   |                            `1500`                            |
 
-### usage
+### Usage
 
 `spool.sh help`
 
-Shows online help
+Shows a quick help
 
 `spool.sh daemon`
 
@@ -362,22 +363,24 @@ Starts the spool daemon
 
 `spool.sh [args ...]`
 
-Sends a request to call the target program, forwarding any arguments in the call. Returns 1 if `SPOOL_TIMEOUT` is reached, or the exit code of the target program. This is a standard synchronous, blocking command.
+Sends a call request to the target, forwarding any arguments. Returns 1 if `SPOOL_TIMEOUT` is reached, or the exit code of the target program. This is a standard synchronous, blocking command.
 
 
 
 ## `entrypoint`
 
-This is a standard frontend script supporting the different container operation modes, used as the Dockerfile ENTRYPOINT.
+A standard frontend script supporting the different container operation modes, used as the Dockerfile ENTRYPOINT.
 
-### requirements
+### Requirements
 
 - Bash 4
 - The `dns01` and `spool.sh` scripts
 
-### configuration and usage
+### Configuration and usage
 
-The variable `DNS01_PATH` should point to this repository. Refer to [Docker image](#docker-image) below for full details.
+The variable `DNS01_PATH` should point to this repository.
+
+Refer to [Docker image](#docker-image) below for full details.
 
 # Set up and deployment
 
@@ -385,11 +388,11 @@ The variable `DNS01_PATH` should point to this repository. Refer to [Docker imag
 
 Add the `dns01` subdirectory in this repo to your `PATH` (advised) or call the scripts there directly. The code will determine its filesystem location and find its own components when necessary. The `rest` and `spool.sh` scripts can be used independently.
 
-All the details on setting up and using the different scripts are found in their own [sections](#Components).
+All details on using the different components are found in their own [sections](#Components).
 
 ## Docker image
 
-The repository includes a Dockerfile that builds a self-contained container image with all the files in this repository and the necessary dependencies.
+The repository includes a Dockerfile that builds a self-contained image with all the files in this repository and the necessary dependencies.
 
 ### Building the image
 
