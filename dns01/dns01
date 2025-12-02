@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# SPDX-License-Identifier: LGPL-3.0-or-later
+# Copyright (c) 2025 Onestein B.V.
+
 declare -A script conf
 
 script[path]="$(readlink -f "${BASH_SOURCE[0]}")"
@@ -22,6 +25,10 @@ conf[dns01_streak_penalty]=0
 conf[dns01_streak_mod]=4
 
 source "${script[dir]}/common"
+
+rest() {
+  "${conf[rest_client]}" "$@"
+}
 
 parse_domain() {
   local domain="$1" wildcard=false fq zone host
@@ -140,12 +147,12 @@ challenge() {
   read -r wildcard fq zone host< <(parse_domain "$domain") || err "Invalid domain syntax: $domain"
 
   local id
-  id=$("${conf[rest_client]}" getj "dns/zones/$zone" | jq -c '.data.id') || return $?
+  id=$(rest getj "dns/zones/$zone" | jq -c '.data.id') || return $?
   local name="_acme-challenge${host:+.$host}"
 
   case $mode in
     add|present)
-      "${conf[rest_client]}" put dns/zones/"$zone" id="$id" name="$name" \
+      rest put dns/zones/"$zone" id="$id" name="$name" \
         records.add="[{
           \"name\" : \"$name\",
           \"type\" : \"TXT\",
@@ -158,7 +165,7 @@ challenge() {
     del|cleanup)
       local quoted=$(printf '%s' "$token" | jq -R '@json')
 
-      "${conf[rest_client]}" put dns/zones/"$zone" id="$id" \
+      rest put dns/zones/"$zone" id="$id" \
         records.remove="[{
           \"name\" : \"$name\",
           \"type\" : \"TXT\",
@@ -221,26 +228,16 @@ traefik_hook() {
 }
 
 help() {
-  echo "Usage: $0 [--create] [--live] domain.tld" >&2
-}
-
-env2conf(){
-  local v rx="$1"
-  shift
-
-  for v in "$@"; do
-    v="DNS01_${v^^}"
-    [[ "${!v}" =~ $rx ]] && conf[${v,,}]="${!v}"
-  done
+  echo "Usage: $0 [--create] [--combo] [--addr <address> ...] [--live] <domain>" >&2
 }
 
 go() {
-  # map environment configuration
-  env2conf "^[0-9]+$" {timeout,streak{,_{threshold,penalty,mod}},backoff{,_{min,max}}}
-  env2conf "^(true|false)$" streak
-  env2conf "^(true|false|auto)$" native
+  # map environment  -----------------------------------------------------------
+  env2conf DNS01_ "^[0-9]+$" {timeout,streak{,_{threshold,penalty,mod}},backoff{,_{min,max}}}
+  env2conf DNS01_ "^(true|false)$" streak
+  env2conf DNS01_ "^(true|false|fallback)$" native
 
-  # command dispatch mode ------------------------------------------------------
+  # command dispatch modes -----------------------------------------------------
   local cmd="$1"
   if [[ "$cmd" =~ ^(present|cleanup)$ ]]; then cmd='traefik_hook'
   elif [[ $(type -t "${cmd}" 2> /dev/null) == 'function' ]]; then shift
@@ -248,7 +245,7 @@ go() {
   fi
   [[ -v cmd ]] && { "$cmd" "$@"; return $?; }
 
-  # main / certbot mode --------------------------------------------------------
+  # main / certbot modes -------------------------------------------------------
   local server="${conf[acme_staging]}" create=false combo=false domain addresses=()
 
   while (( $# )); do
@@ -265,7 +262,7 @@ go() {
   local wildcard fq zone host
   read -r wildcard fq zone host< <(parse_domain "$domain") || err "Invalid domain syntax: $domain"
 
-  "${conf[rest_client]}" get "dns/zones/$zone" &> /dev/null || err "Zone $zone is not hosted at Openprovider - aborting"
+  rest get "dns/zones/$zone" &> /dev/null || err "Zone $zone is not hosted at Openprovider - aborting"
 
   $create && \
     if $wildcard; then msg "Wilcard domain specified - ignoring --create ..."
@@ -276,7 +273,7 @@ go() {
       for address in "${addresses[@]}"; do
         [[ $address == *:* ]] && record_type=AAAA || record_type=A
 
-        "${conf[rest_client]}" getj "dns/zones/$zone" with_records=true \
+        rest getj "dns/zones/$zone" with_records=true \
           | jq -e --arg n "$fq" --arg t "$record_type" --arg a "$address" \
           '.data.records[] | select(.name==$n and .type==$t and .value==$a)' &> /dev/null && {
             msg "$fq $record_type $address already exists – skipping"
@@ -285,9 +282,9 @@ go() {
 
         msg "Creating record $fq type $record_type with address $address..."
 
-        id=${id:=$("${conf[rest_client]}" getj "dns/zones/$zone" | jq -c '.data.id')} || return $?
+        id=${id:=$(rest getj "dns/zones/$zone" | jq -c '.data.id')} || return $?
 
-        "${conf[rest_client]}" put "dns/zones/$zone" name="$zone" id="$id" \
+        rest put "dns/zones/$zone" name="$zone" id="$id" \
           records.add="[{
             \"name\":\"$host\",
             \"type\":\"$record_type\",

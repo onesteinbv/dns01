@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# SPDX-License-Identifier: LGPL-3.0-or-later
+# Copyright (c) 2025 Onestein B.V.
+
 set -o pipefail
 
 declare -A script conf err hint
@@ -16,6 +19,18 @@ hint[http80]='Check required fields / JSON shape'
 hint[http81]='Wrong HTTP verb / endpoint'
 hint[http98]='Check that object belongs to your account'
 hint[http99]='Nothing matched the filter'
+
+# boilerplate helper
+# regex match prefixed env vars, copy to conf[] entries
+env2conf(){
+  local v prefix="$1" rx="$2"
+  shift 2
+
+  for v in "$@"; do
+    v="${prefix}${v^^}"
+    [[ "${!v}" =~ $rx ]] && conf[${v,,}]="${!v}"
+  done
+}
 
 msg() { printf '%s %s[%s] %s\n' "$(date '+%Y-%m-%dT%TZ')" "${JOB_ID:+job $JOB_ID }" "${script[name]}" "$*" >&2; }
 

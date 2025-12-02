@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
+# SPDX-License-Identifier: LGPL-3.0-or-later
+# Copyright (c) 2025 Onestein B.V.
+
+set -eo pipefail
 
 mode="${DNS01_MODE:-idle}"
 
@@ -12,9 +15,16 @@ case "$mode" in
 
   spool)
     echo "[entrypoint] starting spool mode"
-    cp -f "$DNS01_PATH/spool.sh" "$DNS01_SPOOL/spool.sh"
-    [[ -d "$DNS01_SPOOL/spool" ]] || mkdir "$DNS01_SPOOL/spool"
-    exec "$DNS01_SPOOL/spool.sh" daemon
+
+    [[ -z "$DNS01_SPOOL" ]] && DNS01_SPOOL="${SPOOL_DIR:-$DNS01_PATH}"
+
+    if [[ -n "$SPOOL_DIR" ]] && [[ ! -d "$SPOOL_DIR" ]]; then mkdir "$SPOOL_DIR"
+    elif [[ ! -d "$DNS01_SPOOL/spool" ]]; then mkdir "$DNS01_SPOOL/spool"
+    fi
+
+    [[ "$DNS01_SPOOL" != "$DNS01_PATH" ]] && cp -f "$DNS01_PATH/spool.sh" "$DNS01_SPOOL"
+
+    SPOOL_JOB=dns01 exec "$DNS01_SPOOL/spool.sh" daemon
     ;;
 
   certbot)

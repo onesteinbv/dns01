@@ -1,13 +1,4 @@
-## k8s apps (helm/ArgoCD)
-- traefik "manual" provider
-- traefik "httpreq" provider
-- Argo Event wrapper (same-ish functionality as the optional HTTP listener, actually it could also talk to it)
-- Argo Workflow with support for certbot modes
-- daemonset (synchronized cron jobs?)
-
-
-# TODO
-### phase 1 - finish production core
+### 1 - Initial release
 
 #### done
 - ~~`--combo` takes a lot of time (due to openprovider flapping)~~
@@ -28,14 +19,27 @@
 - ~~push docker image~~
 - ~~traefik chart plumbing
 - ~~optimize spooler~~
+- ~~Traefik Helm chart integration~~
+ - ~~document~~
+ - ~~revise values.yaml for hardcoded values~~
+ - ~~have the spooler preserve multi-word arguments~~
+        
+#### priority bucket 1 - initial release
+- finish initial doc
+  - ~~dns01~~
+  - ~~spool.sh~~
+  - ~~entrypoint~~
+  - ~~standalone~~
+  - ~~docker image~~
+  - ~~TODO~~
 
-#### priority bucket 1 - initial deliverable
-- write initial documentation
-- add versioning
-
-- Traefik Helm chart integration
- - document
- - revise values.yaml for hardcoded values
+- GH
+  - repo meta
+  - license
+  - packaging
+  - deps
+  - compatibility notes
+  - versioning, releases
 
 #### priority bucket 2 - improvements + refactor for phase 2
 - sanitize logs, redact any sensitive information such as authorization headers
@@ -53,20 +57,20 @@
 - rest of bashlib integration: fq, cleanup, iomodes
 - complete unit tests
 
-### phase 2 - finish kubernetes plumbing
+### 2 - finish kubernetes plumbing
 - Helm chart, ArgoCD app
 - CI/CD
 
 - add certbot-long mode with auto rotation
 - create canonical certbot dirs if they don't exist (for cronjobs etc)
+- daemonset / synchronized cron jobs
 
 * add listen mode, support only Traefik's "httpreq" initially
 * connect listener to certbot/certbot-long modes
 
 - Argo Event+Workflow supporting all modes
-- repo meta: licence, packaging, deps, compatibility notes, full doc
 
-### phase 3 - extensions and integrations
+### 3 - extensions and integrations
 - cert‑manager webhook
 - Github Action support
 - Terraform provider

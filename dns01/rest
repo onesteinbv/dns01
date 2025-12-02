@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# SPDX-License-Identifier: LGPL-3.0-or-later
+# Copyright (c) 2025 Onestein B.V.
+
 declare -A script conf
 
 script[path]="$(readlink -f "${BASH_SOURCE[0]}")"
@@ -101,7 +104,7 @@ req() {
 }
 
 auth() {
-  local user="$REST_USERNAME" pass="$REST_PASSWORD" client="${FUNCNAME[1]}"
+  local user="${REST_USERNAME:-$1}" pass="${REST_PASSWORD:-$2}" client="${FUNCNAME[1]}"
 
   [[ -z $user || -z $pass ]] && {
     if [[ -t 0 ]]; then
@@ -118,14 +121,14 @@ auth() {
   json="$(post "${conf[auth_ep]}" "${req[@]}")" || return $?
   token="$(jq -er "${conf[auth_tok]}" <<< "$json")" || err parse "Could not extract token"
 
-  declare -gx "${conf[auth_var]}"="$token"
+  [[ -v conf[auth_var] ]] && declare -gx "${conf[auth_var]}"="$token"
   [[ $client != 'req' ]] && printf '%s' "$token"
 
   return 0
 }
 
 go() {
-  local verb cmd="$1"
+  local verb
 
   for verb in post get put delete patch; do
     IFS= read -rd '' verb <<VERB
@@ -135,7 +138,8 @@ VERB
     eval "$verb"
   done
 
-  [[ $(type -t "${cmd}" 2> /dev/null) == 'function' ]] && "$@"
+  while [[ "$1" == @(${FUNCNAME[0]}|req|comma_items) ]]; do shift; done
+  [[ $(type -t "$1" 2> /dev/null) == 'function' ]] && "$@"
 }
 
 go "$@"
