@@ -21,7 +21,7 @@ hint[http98]='Check that object belongs to your account'
 hint[http99]='Nothing matched the filter'
 
 # boilerplate helper
-# regex match prefixed env vars to conf[] entries
+# regex match prefixed env vars, copy to conf[] entries
 env2conf(){
   local v prefix="$1" rx="$2"
   shift 2

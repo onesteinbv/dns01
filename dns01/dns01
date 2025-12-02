@@ -226,7 +226,7 @@ traefik_hook() {
 }
 
 help() {
-  echo "Usage: $0 [--create] [--live] domain.tld" >&2
+  echo "Usage: $0 [--create] [--combo] [--addr <address> ...] [--live] <domain>" >&2
 }
 
 go() {
