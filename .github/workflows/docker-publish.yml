@@ -1,0 +1,59 @@
+name: Publish image on release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    name: Build and publish image to GHCR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    env:
+      IMAGE_NAME: dns01
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: vars
+        run: |
+          # Example: v0.1.0 -> 0.1.0
+          raw_tag="${{ github.event.release.tag_name }}"
+          version="${raw_tag#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        run: |
+          owner="${{ github.repository_owner }}"
+          version="${{ steps.vars.outputs.version }}"
+          image="ghcr.io/${owner}/${{ env.IMAGE_NAME }}"
+
+          echo "Building image ${image}:${version} and ${image}:latest"
+          docker build \
+            -t "${image}:${version}" \
+            -t "${image}:latest" \
+            .
+
+      - name: Push image
+        run: |
+          owner="${{ github.repository_owner }}"
+          version="${{ steps.vars.outputs.version }}"
+          image="ghcr.io/${owner}/${{ env.IMAGE_NAME }}"
+
+          echo "Pushing ${image}:${version}"
+          docker push "${image}:${version}"
+
+          echo "Pushing ${image}:latest"
+          docker push "${image}:latest"
