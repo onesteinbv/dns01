@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# SPDX-License-Identifier: LGPL-3.0-or-later
+# Copyright (c) 2025 Onestein B.V.
+
 declare -A script conf
 
 script[path]="$(readlink -f "${BASH_SOURCE[0]}")"

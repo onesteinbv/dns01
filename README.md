@@ -29,3 +29,19 @@ A Dockerfile and image are provided, along with instructions for Traefik/Kuberne
 # How to set up and use this code
 
 Please head to the [documentation section](doc/Documentation.md#set-up-and-deployment) for quick installation instructions.
+
+# License
+
+This project is licensed under the **GNU Lesser General Public License v3.0 (LGPL-3.0)**  or any later version, at your option.
+
+All original code in this repository is © 2025 Onestein B.V.
+
+Users are free to use, modify, and redistribute the software under the conditions outlined in the license.
+
+The license applies to all scripts and source files in this repository and to the Docker image built from them.
+
+All source files include SPDX license identifiers for automated license compliance.
+
+Contributions are welcome and will be accepted under the same license terms.
+
+See the [LICENSE](LICENSE) file in the repository root for the full text.

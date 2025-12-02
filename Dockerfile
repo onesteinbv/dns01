@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
+# Copyright (c) 2025 Onestein B.V.
+
 FROM debian:bullseye-slim
 
 RUN apt-get update && apt-get install -y bash curl jq dnsutils certbot \
