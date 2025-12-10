@@ -128,7 +128,7 @@ wait_propagation() {
 
       # native-style success
       (( streak_p >= 100 && stable_p >= 100 || streak_p >= 200 )) && {
-        msg "Token propagated in $((now - start))s to all authoritative nameservers"
+        msg "Token propagated in $(fmtTime $((now - start))) to all authoritative nameservers"
         return 0
       }
 
@@ -186,16 +186,16 @@ traefik_hook() {
   [[ "$domain" =~ ^_acme-challenge\.(.*)\.$ ]] && domain="${BASH_REMATCH[1]}"
 
   case "${conf[dns01_native]}" in
-    fallback) "${conf[@]@A}" && declare -gA native_conf="${_#*=}"                     ;&
+    fallback) arrCpy conf native_conf                   ;&
 
     false)
       conf[dns01_timeout]="$EXEC_PROPAGATION_TIMEOUT"
       conf[dns01_backoff]="$EXEC_POLLING_INTERVAL"
       conf[dns01_backoff_min]="$EXEC_POLLING_INTERVAL"
       conf[dns01_backoff_max]="$EXEC_POLLING_INTERVAL"
-      conf[dns01_streak]=false                                                        ;;
+      conf[dns01_streak]=false                          ;;
 
-    true) true                                                                        ;;
+    true) true                                          ;;
 
     *)
       [[ -v DNS01_TIMEOUT ]] || {
@@ -220,7 +220,7 @@ traefik_hook() {
   challenge "$mode" "$domain" "$token" || {
     [[ "${conf[dns01_native]}" == 'fallback' ]] && {
       msg "Basic propagation detection failed, trying native streak mode ..."
-      "${native_conf[@]@A}" && declare -A conf="${_#*=}"
+      arrCpy -f native_conf conf
       conf[dns01_streak]=true
       challenge wait_propagation "$domain" "$token"
     }
