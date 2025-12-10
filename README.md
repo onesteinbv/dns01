@@ -11,7 +11,7 @@ A toolkit to handle DNS-01 ACME challenges with a focus on Traefik (lego), Openp
 
 ## Standalone operation
 
-`dns01` can run alongside certificate brokers such as lego/Traefik, or operate standalone in custom workflows:
+`dns01` can run alongside certificate brokers such as lego/Traefik, or standalone in custom workflows:
 
 - certificate generation (via certbot)
 - creating A/AAAA target records
@@ -53,7 +53,7 @@ The domain should belong in a zone that you own. Challenges will be attempted us
 
 # Kubernetes deployment
 
-See [Documentation -> Set up and deployment](doc/Documentation.md#set-up-and-deployment) for quick instructions on deploying on Kubernetes.
+Head to [Documentation -> Set up and deployment](doc/Documentation.md#set-up-and-deployment) for quick instructions.
 
 
 # License

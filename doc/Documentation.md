@@ -416,7 +416,7 @@ Spool worker:
 
 ```
 docker run --rm \
-  -e DNS-01_MODE=spool \
+  -e DNS01_MODE=spool \
   -e SPOOL_DIR=/var/spool/dns01 \
   -e SPOOL_JOB=/opt/dns01/dns01 \
   -v "$(pwd)/spool:/var/spool/dns01" \
