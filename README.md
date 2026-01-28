@@ -32,7 +32,7 @@ A Dockerfile and image are provided, along with instructions for Traefik/Kuberne
 
 At the root of this repository:
 ```bash
-docker build -t ghcr.io/onestein/dns01:latest .
+docker build -t ghcr.io/onesteinbv/dns01:latest .
 
 docker run --rm \
   -u $UID \
@@ -40,7 +40,7 @@ docker run --rm \
   -e REST_PASSWORD=<your Openprovider password> \
   -e DNS01_MODE=spool \
   -e DNS01_SPOOL=/spool \
-  -v  "$(pwd):/spool" ghcr.io/onestein/dns01:latest
+  -v  "$(pwd):/spool" ghcr.io/onesteinbv/dns01:latest
 ```
 
 The container will start in **spool mode**, watching a `spool/` subdirectory of the current directory for DNS-01 requests.
