@@ -24,6 +24,10 @@ conf[dns01_streak_threshold]=10
 conf[dns01_streak_penalty]=0
 conf[dns01_streak_mod]=4
 
+# challenge collision controls for some HA setups
+# see https://doc.traefik.io/traefik/reference/install-configuration/tls/certificate-resolvers/acme/#letsencrypt-support-with-the-ingress-provider
+conf[dns01_desync]=0
+
 source "${script[dir]}/common"
 
 rest() {
@@ -142,6 +146,35 @@ wait_propagation() {
   err "Timeout after $((now - start))s waiting for DNS propagation"
 }
 
+claim_challenge() {
+  (( conf[dns01_desync] )) || return 0
+
+  local zone="$1" name="$2" domain="$3" token="$4"
+  local jitter="$(( $(od -An -N2 -tu2 < /dev/urandom | tr -d ' ') % (conf[dns01_desync] + 1) ))"
+
+  msg "Wait $jitter seconds ..."
+  sleep $jitter
+
+  msg "Checking whether a challenge record for $domain exists ..."
+
+  rest getj "dns/zones/$zone/records" type=TXT record_name_pattern="$name.$zone" \
+    | jq -er '.data.total > 0' > /dev/null && {
+    msg "Found an existing record for $domain"
+
+    # same token, wait for winner cleanup before abort
+    local waited=0 wait_abort=30
+    while rest getj "dns/zones/$zone/records" type=TXT record_name_pattern="$name.$zone" \
+      | jq -e --arg t "$token" '.data.results[] | select(.value == $t)' > /dev/null; do
+      sleep 30
+      (( (waited += 30) > conf[dns01_timeout] + wait_abort )) && err "Timeout waiting for existing challenge cleanup"
+    done
+
+    err "Lost race, aborting"
+  }
+
+  msg "No challenge found for $domain, claiming creation ..."
+}
+
 challenge() {
   local mode="$1" domain="$2" token="$3" wildcard fq zone host
   read -r wildcard fq zone host< <(parse_domain "$domain") || err "Invalid domain syntax: $domain"
@@ -152,6 +185,8 @@ challenge() {
 
   case $mode in
     add|present)
+      claim_challenge "$zone" "$name" "$domain" "$token"
+
       rest put dns/zones/"$zone" id="$id" name="$name" \
         records.add="[{
           \"name\" : \"$name\",
@@ -233,7 +268,7 @@ help() {
 
 go() {
   # map environment  -----------------------------------------------------------
-  env2conf DNS01_ "^[0-9]+$" {timeout,streak{,_{threshold,penalty,mod}},backoff{,_{min,max}}}
+  env2conf DNS01_ "^[0-9]+$" {timeout,desync,streak{,_{threshold,penalty,mod}},backoff{,_{min,max}}}
   env2conf DNS01_ "^(true|false)$" streak
   env2conf DNS01_ "^(true|false|fallback)$" native
 
