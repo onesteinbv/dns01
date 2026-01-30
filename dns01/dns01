@@ -75,7 +75,7 @@ wait_propagation() {
   done
   (( ${#nameservers[@]} )) || err "Couldn't find authoritative nameservers for $zone - aborting"
 
-  msg "Waiting for TXT propagation ($name.$zone)"
+  msg "Waiting for challenge propagation ($name.$zone)"
   local test=( "${nameservers[@]}" ) extend_streak
   while (( (extend_streak=${#test[@]} == ${#nameservers[@]}), (now=$(date +%s)) - start < timeout )); do
     for i in "${!test[@]}"; do
@@ -86,7 +86,7 @@ wait_propagation() {
         # lego-style success
         ${conf[dns01_streak]} || {
           echo >&2
-          msg "Token propagated in $((now - start))s to all authoritative nameservers"
+          msg "Challenge propagated in $((now - start))s to all authoritative nameservers"
           return 0
         }
 
@@ -143,7 +143,7 @@ wait_propagation() {
     sleep $backoff
   done
 
-  err "Timeout after $((now - start))s waiting for DNS propagation"
+  err "Timeout after $((now - start))s waiting for challenge propagation"
 }
 
 claim_challenge() {
@@ -179,9 +179,8 @@ challenge() {
   local mode="$1" domain="$2" token="$3" wildcard fq zone host
   read -r wildcard fq zone host< <(parse_domain "$domain") || err "Invalid domain syntax: $domain"
 
-  local id
+  local id name="_acme-challenge${host:+.$host}"
   id=$(rest getj "dns/zones/$zone" | jq -c '.data.id') || return $?
-  local name="_acme-challenge${host:+.$host}"
 
   case $mode in
     add|present)
