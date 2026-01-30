@@ -12,13 +12,19 @@ SPOOL_WORKERS="${SPOOL_WORKERS:-1}"
 
 # synchronous spool client
 send_job() {
-  JOB_ID="$(date +%s)-$$"
+  REQUEST="$(mktemp "$SPOOL_DIR/$$-XXXXXXXX.request_tmp")" || return 1
+  JOB_ID="$(basename "$REQUEST" .request_tmp)"
   {
     for ARG in "$@"; do
       printf '%s' "$ARG" | base64 | tr -d '\n'
       echo
     done
-  } > "$SPOOL_DIR/$JOB_ID.request"
+  } > "$REQUEST" && {
+    mv "$REQUEST" "${REQUEST%_tmp}" || {
+      rm -f "$REQUEST"
+      return 1
+    }
+  }
 
   RESPONSE="$SPOOL_DIR/$JOB_ID.response"
   i="$SPOOL_TIMEOUT"
@@ -27,8 +33,9 @@ send_job() {
       echo "[spool] timeout waiting for $RESPONSE" >&2
       return 1
     fi
-    sleep 1
     i=$((i - 1))
+
+    sleep 1
   done
 
   RETVAL=$(cat "$RESPONSE")
@@ -45,21 +52,37 @@ daemon() {
     [ -e "$1" ] || { sleep 1; continue; }
 
     for REQUEST in "$SPOOL_DIR"/*.request; do
-      [ -e "$REQUEST" ] || continue
+      [ -e "$REQUEST" ] && {
+        CLAIM="$(mktemp "${REQUEST%.request}.$$-claimed.XXXXXXXX")" \
+        && {
+          mv "$REQUEST" "$CLAIM" 2>/dev/null || {
+            rm -f "$CLAIM"
+            continue
+          }
+        }
+      } || continue
 
-      export JOB_ID="$(basename "$REQUEST" .request)"
+      JOB_ID="$(basename "$CLAIM")"
+      JOB_ID="${JOB_ID%%.*}"
 
       set --
       {
         while IFS= read -r ARG; do
           set -- "$@" "$(printf '%s' "$ARG" | base64 -d)"
         done
-      } < "$REQUEST"
+      } < "$CLAIM"
 
       echo "[spool] dispatching asynchronous job id=$JOB_ID (command: $SPOOL_JOB $*)"
 
-      ( "$SPOOL_JOB" "$@"; echo "$?" > "$SPOOL_DIR/$JOB_ID.response") &
-      rm -f "$REQUEST"
+      (
+        RESPONSE="$SPOOL_DIR/$JOB_ID.response"
+        "$SPOOL_JOB" "$@"
+        echo $? > "${RESPONSE}_$$" && {
+          mv "${RESPONSE}_$$" "$RESPONSE" || rm -f "${RESPONSE}_$$"
+        }
+      ) &
+
+      rm -f "$CLAIM"
     done
   done
 }
