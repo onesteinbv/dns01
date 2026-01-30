@@ -181,6 +181,7 @@ challenge() {
 
   local id name="_acme-challenge${host:+.$host}"
   id=$(rest getj "dns/zones/$zone" | jq -c '.data.id') || return $?
+  token=$(printf '%s' "$token" | jq -R '@json')
 
   case $mode in
     add|present)
@@ -191,20 +192,18 @@ challenge() {
           \"name\" : \"$name\",
           \"type\" : \"TXT\",
           \"ttl\"  : 600,
-          \"value\": \"${token}\"
+          \"value\": "$token"
         }]" || return $?                                          ;&
 
     wait_propagation) wait_propagation "$name" "$zone" "$token"   ;;
 
     del|cleanup)
-      local quoted=$(printf '%s' "$token" | jq -R '@json')
-
       rest put dns/zones/"$zone" id="$id" \
         records.remove="[{
           \"name\" : \"$name\",
           \"type\" : \"TXT\",
           \"ttl\"  : 600,
-          \"value\": $quoted
+          \"value\": "$token"
         }]"                                                       ;;
 
     *) err "Unknown mode: $mode"                                  ;;
