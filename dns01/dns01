@@ -146,11 +146,18 @@ wait_propagation() {
   err "Timeout after $((now - start))s waiting for challenge propagation"
 }
 
+# linear map from sha to jitter range
+map_jitter() {
+  local range="$1"
+  local seed="$(hostname)$$${BASHPID}${PPID}$(date +%s%N)$(head -c8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  local hash_val=$((0x$(printf '%s' "$seed" | sha256sum | head -c8)))
+  echo $(( hash_val * range / 0x100000000 ))
+}
+
 claim_challenge() {
   (( conf[dns01_desync] )) || return 0
 
-  local zone="$1" name="$2" domain="$3" token="$4"
-  local jitter="$(( $(od -An -N2 -tu2 < /dev/urandom | tr -d ' ') % (conf[dns01_desync] + 1) ))"
+  local zone="$1" name="$2" domain="$3" token="$4" jitter="$(map_jitter ${conf[dns01_desync]})"
 
   msg "Wait $jitter seconds ..."
   sleep $jitter
