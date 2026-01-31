@@ -43,6 +43,8 @@
   - ~~versioning, releases~~
 
 #### priority bucket 2 - improvements + refactor for phase 2
+- dns01_native -> dns01_mode
+- have hooks express semantics or modes, not clients
 - sanitize logs, redact any sensitive information such as authorization headers
 - send relevant env/extra config from traefik via spool
 - spooler: handle cleanup, confirmations, better info on send_job, extend failure modes

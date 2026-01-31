@@ -141,37 +141,39 @@ A script to assist with DNS-01 ACME challenges.
 
 ### Configuration
 
-These entries are expected to be defined in a `conf` associative array:
+These entries are used when defined in a `conf` associative array:
 
-|      `conf[]` entry      |                           Defines                            |
-| :----------------------: | :----------------------------------------------------------: |
-|      `rest_client`       |     The path to the `rest` script or equivalent program      |
-|      `acme_staging`      |              The URL of an ACME staging server               |
-|       `acme_live`        |                The URL of an ACME live server                |
-|       `acme_email`       |            The email to use for ACME registration            |
-|      `dns01_native`      |    Propagation detection - enable/disable native tracking    |
-|     `dns01_timeout`      |            Propagation detection - global timeout            |
-|     `dns01_backoff`      |         Propagation detection - initial backoff time         |
-|   `dns01_backoff_min`    |         Propagation detection - backoff lower bound          |
-|   `dns01_backoff_max`    |         Propagation detection - backoff higher bound         |
-|      `dns01_streak`      |    Propagation detection - enable/disable streak tracking    |
-| `dns01_streak_threshold` | Propagation detection - initial target streak to succeed tracking |
-|  `dns01_streak_penalty`  | Propagation detection - streak threshold penalization speed  |
-|    `dns01_streak_mod`    | Propagation detection - streak threshold penalization speed  |
+|      `conf[]` entry      |                           Defines                           |                            Values                            |
+| :----------------------: | :---------------------------------------------------------: | :----------------------------------------------------------: |
+|      `rest_client`       |     The path to the `rest` script or equivalent program     |                          `<string>`                          |
+|      `acme_staging`      |              The URL of an ACME staging server              |                          `<string>`                          |
+|       `acme_live`        |               The URL of an ACME live server                |                          `<string>`                          |
+|       `acme_email`       |           The email to use for ACME registration            |                          `<string>`                          |
+|      `dns01_native`      |   Propagation detection - enable/disable native tracking    | `true`: disable lego semantics<br/>`false`: enable lego semantics, ignore other `dns_*` entries<br/>`fallback`: attempt `false` behavior first, attempt `true` behavior on failure<br/>(`dns_*` entries may override)<br/>`<other value>`: enable lego semantics<br/>(`dns_*` entries may override) |
+|     `dns01_timeout`      |           Propagation detection - global timeout            |                         `<integer>`                          |
+|     `dns01_backoff`      |        Propagation detection - initial backoff time         |                         `<integer>`                          |
+|   `dns01_backoff_min`    |         Propagation detection - backoff lower bound         |                         `<integer>`                          |
+|   `dns01_backoff_max`    |        Propagation detection - backoff higher bound         |                         `<integer>`                          |
+|      `dns01_streak`      |            Propagation detection - global toggle            | `true` - enable streak tracking<br/>`false` - disable streak tracking |
+| `dns01_streak_threshold` |  Propagation detection - initial target streak to succeed   |                         `<integer>`                          |
+|  `dns01_streak_penalty`  | Propagation detection - streak threshold penalization speed |                         `<integer>`                          |
+|    `dns01_streak_mod`    | Propagation detection - streak threshold penalization speed |                         `<integer>`                          |
+|      `dns01_desync`      |                Challenge collision avoidance                | `0`:  disable collision avoidance<br/>`<integer>`: jitter window in seconds |
 
- These variables are used when set in the script or environment:
+ These variables are mapped to `conf[]` entries when found in the environment:
 
-|         Variable         |      `conf[]` entry      |                            Values                            |
-| :----------------------: | :----------------------: | :----------------------------------------------------------: |
-|      `DNS01_NATIVE`      |      `dns01_native`      | `true`: fully disable lego semantics<br>`false`: fully enable lego semantics (can't be overriden)<br>`fallback`: try `false` behavior first otherwise `true` behavior<br/>(`DNS_*` variables can override)<br>`<any other value>`: enable lego semantics<br/>(`DNS_*` variables can override) |
-|     `DNS01_TIMEOUT`      |     `dns01_timeout`      | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
-|     `DNS01_BACKOFF`      |     `dns01_backoff`      | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
-|   `DNS01_BACKOFF_MIN`    |   `dns01_backoff_min`    | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
-|   `DNS01_BACKOFF_MAX`    |   `dns01_backoff_max`    | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
-|      `DNS01_STREAK`      |      `dns01_streak`      |                      `true` or `false`                       |
-| `DNS01_STREAK_THRESHOLD` | `dns01_streak_threshold` | `<integer value>`: set `conf[]` value<br>`<any other value>`: use `conf[]` value |
-|  `DNS01_STREAK_PENALTY`  |  `dns01_streak_penalty`  | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
-|    `DNS01_STREAK_MOD`    |    `dns01_streak_mod`    | `<integer value>`: set `conf[]` value<br/>`<any other value>`: use `conf[]` value |
+|                           Variable                           |      `conf[]` entry      |
+| :----------------------------------------------------------: | :----------------------: |
+|                        `DNS01_NATIVE`                        |      `dns01_native`      |
+| `DNS01_TIMEOUT`<br />`EXEC_PROPAGATION_TIMEOUT` (in [lego mode](#traefiklego-behaviors))) |     `dns01_timeout`      |
+| `DNS01_BACKOFF`<br />`EXEC_POLLING_INTERVAL` (in [lego mode](#traefiklego-behaviors))) |     `dns01_backoff`      |
+| `DNS01_BACKOFF_MIN`<br />`EXEC_POLLING_INTERVAL` (in [lego mode](#traefiklego-behaviors))) |   `dns01_backoff_min`    |
+| `DNS01_BACKOFF_MAX`<br />`EXEC_POLLING_INTERVAL` (in [lego mode](#traefiklego-behaviors))) |   `dns01_backoff_max`    |
+|                        `DNS01_STREAK`                        |      `dns01_streak`      |
+|                   `DNS01_STREAK_THRESHOLD`                   | `dns01_streak_threshold` |
+|                    `DNS01_STREAK_PENALTY`                    |  `dns01_streak_penalty`  |
+|                      `DNS01_STREAK_MOD`                      |    `dns01_streak_mod`    |
+|                        `DNS01_DESYNC`                        |      `dns01_desync`      |
 
 ### Usage
 
@@ -215,7 +217,7 @@ The hook expects the target domain and DNS-01 challenge token to be passed on th
 > **Note**
 > lego exec "raw" mode is not supported at this time
 
-### Adaptive propagation detection (the "native" mode)
+### Propagation detection
 
 A DNS provider data plane can return flaky results (e.g. from anycast clusters with unpredictable zone updates), so **dns01**'s propagation detection will not trust a single test, *even when all authoritative servers did answer correctly*.
 
@@ -326,7 +328,39 @@ When lego compatible semantics are used:
 > **Note**
 > When using lego detection but enabling backoff scaling, the scaling can only be **positive**, ie. increased on failed probes, since the first successful probe totally succeeds detection.
 
+#### Challenge collision avoidance
 
+In some multi-instance setups, there is no coordination mechanism applied on the side of the dns01 client ([for example with some Traefik versions](https://doc.traefik.io/traefik/reference/install-configuration/tls/certificate-resolvers/acme/#letsencrypt-support-with-the-ingress-provider)). This might have multiple pod independently detecting certificate requests and dispatching its own challenge hooks.
+
+If the DNS provider rejects multiple TXT records for the same domain, the race will be eliminated there. But if it accepts multiple TXT records for some domain, all the pods will create entries and the first propagation detection that succeeds will succeed the DNS-01 challenge.
+
+To mitigate the risk of too many probes to the same domain causing throttling at the authoritative servers, **dns01** implements a simple, stateless avoidance mechanism. When enabled, each challenge request:
+
+1. Waits a randomized jitter period before proceeding
+2. Checks whether a challenge record for the target domain already exists
+3. If a record exists with a different token, it aborts immediately
+4. If a record exists with the same token, it waits for it to disappear before aborting
+5. If no record exists for the target domain, it proceeds with creating it
+
+The reason 4. behaves differently is that **dns01** clients may request the deletion of the TXT record after a detection pod returns. If a "losing" pod returns before a "winning" one, the deletion will be applied on the TXT record that is being used to solve the challenge. 
+
+The jitter is computed by mixing multiple entropy sources (hostname, process IDs, nanosecond timestamp, `/dev/urandom`) through SHA256, then mapping linearly the result from the hash space to a configured window size.
+
+The variable `DNS01_DESYNC` enables this mecanism and configures the jitter window. It is mapped to the configuration entry `conf[dns01_desync]` when found in the environment, and it defaults to `0` (disable collision avoidance).
+
+Higher jitter windows will statistically reduce the chance of collisions at the cost of introducing extra delays when starting the challenges. The relationship is roughly:
+
+| `DNS01_DESYNC` | Collision chance (3s API latency) |
+| :------------: | :-------------------------------: |
+|      15s       |               ~40%                |
+|      30s       |               ~20%                |
+|      60s       |               ~10%                |
+|      120s      |                ~5%                |
+
+For HA deployments with 2-3 replicas, a value of 60-120 seconds is recommended. This is still small compared to worst-case propagation times (10-20 minutes) while providing good collision resistance.
+
+> **Note**
+> This mechanism is stateless and best-effort, reducing collisions to levels where redundant work is rarer. Without external coordination (distributed locks, leader election), perfect exclusivity cannot be guaranteed. 
 
 ## `spool.sh`
 
@@ -334,7 +368,10 @@ A generic, single-queue micro spool written for POSIX. It consists of one long-r
 
 The spooler is started targeting one program, and any requests along with their arguments are sent via the synchronous calls. When the spooler finds a new request, it reads all the arguments for its target and calls it in background. The background call waits for the target to return, and writes the exit status in a response file. 
 
-This is the [mechanism](#traefik-plugin) used to set up **dns01** as a Traefik `exec` plugin, but it can wrap any target command.
+Multiple spooler workers can be spawned via `SPOOL_WORKERS` to handle concurrent requests. Each worker uses atomic file operations (`mktemp` + `mv`) to claim requests, ensuring that exactly one worker processes each job even when multiple workers race for the same request file.
+
+> **Note**
+> This is the mechanism used to set up **dns01** as a Traefik `exec` [plugin](#traefik-plugin), but it can wrap any target command
 
 ### Requirements
 
@@ -350,6 +387,7 @@ These variables are used when set in the script or environment:
 |   `SPOOL_JOB`   |                 The target command                  |                         `/bin/false`                         |
 |   `SPOOL_DIR`   | The directory to use for the request/response files | A `/spool` subdirectory relative to the path of the script instance |
 | `SPOOL_TIMEOUT` |   Seconds before giving up and returning an error   |                            `1500`                            |
+| `SPOOL_WORKERS` |             Number of worker processes              |                             `1`                              |
 
 ### Usage
 
@@ -558,3 +596,36 @@ certificatesResolvers:
 >
 > -  `/data` is a persistent volume for the certificate store. Please refer to the Traefik [documentation on ACME](https://doc.traefik.io/traefik/reference/install-configuration/tls/certificate-resolvers/acme/) for more information.
 > - When using the **dns01** native propagation checks (`DNS01_NATIVE=true`), disable the lego checks on the certificate resolver with `disablePropagationCheck: true`. See [Usage](#usage-1) and [Notes](#adaptive-propagation-detection-the-native-mode) for details.
+
+### High availability considerations
+
+The [Traefik documentation](https://doc.traefik.io/traefik/reference/install-configuration/tls/certificate-resolvers/acme/#letsencrypt-support-with-the-ingress-provider) notes that running multiple Traefik instances with ACME has limitations. Each replica maintains its own view of certificate state, which can cause redundant challenge attempts for the same domain.
+
+When using **dns01** with multi-replica Traefik deployments:
+
+1. **Enable collision avoidance** by setting `DNS01_DESYNC` to a value between 60 and 120 seconds. This adds randomized jitter to challenge requests, reducing the likelihood of simultaneous record creation attempts.
+
+2. **Use a shared spool directory** mounted as a `ReadWriteMany` volume (or equivalent) so that all Traefik pods dispatch to the same **dns01** sidecar pool.
+
+3. **Consider multiple spool workers** via `SPOOL_WORKERS` if challenge throughput is a concern. The atomic claim mechanism ensures safe parallel processing.
+
+Example sidecar configuration with collision avoidance and multiple workers enabled:
+
+```yaml
+additionalContainers:
+  - name: onestein-dns01
+    image: ghcr.io/onesteinbv/dns01:latest
+    # ... volume mounts and credentials as before ...
+    env:
+    - name: DNS01_MODE
+      value: spool
+    - name: DNS01_SPOOL
+      value: /acme-scripts
+    - name: DNS01_NATIVE
+      value: "true"
+    - name: DNS01_DESYNC
+      value: "60"
+    - name: SPOOL_WORKERS
+      value: "2"
+```
+
