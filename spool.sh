@@ -56,7 +56,7 @@ daemon() {
 
     for REQUEST in "$SPOOL_DIR"/*.request; do
       [ -e "$REQUEST" ] && {
-        JOB_ID="$(basename "$REQUEST" .request)"
+        export JOB_ID="$(basename "$REQUEST" .request)"
         CLAIM="$(mktemp -p "$SPOOL_DIR" "claimed.$JOB_ID-XXXXXX")" && {
           mv "$REQUEST" "$CLAIM" 2>/dev/null || {
             rm -f "$CLAIM"
