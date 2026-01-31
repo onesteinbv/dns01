@@ -12,16 +12,19 @@ SPOOL_WORKERS="${SPOOL_WORKERS:-1}"
 
 # synchronous spool client
 send_job() {
-  REQUEST="$(mktemp "$SPOOL_DIR/$$-XXXXXXXX.request_tmp")" || return 1
-  JOB_ID="$(basename "$REQUEST" .request_tmp)"
+  TMP="$(mktemp -p "$SPOOL_DIR" "$$-XXXXXX")" || return 1
+  JOB_ID="$(basename "$TMP")"
+  rm -f "$TMP"
+  REQUEST="$SPOOL_DIR/$JOB_ID.request"
   {
     for ARG in "$@"; do
       printf '%s' "$ARG" | base64 | tr -d '\n'
       echo
     done
-  } > "$REQUEST" && {
-    mv "$REQUEST" "${REQUEST%_tmp}" || {
-      rm -f "$REQUEST"
+  } > "${REQUEST}_tmp" && {
+    mv "${REQUEST}_tmp" "$REQUEST" || {
+      echo "[spool] error while writing request: $REQUEST"
+      rm -f "${REQUEST}_tmp" "$REQUEST"
       return 1
     }
   }
@@ -53,17 +56,14 @@ daemon() {
 
     for REQUEST in "$SPOOL_DIR"/*.request; do
       [ -e "$REQUEST" ] && {
-        CLAIM="$(mktemp "${REQUEST%.request}.$$-claimed.XXXXXXXX")" \
-        && {
+        JOB_ID="$(basename "$REQUEST" .request)"
+        CLAIM="$(mktemp -p "$SPOOL_DIR" "claimed.$JOB_ID-XXXXXX")" && {
           mv "$REQUEST" "$CLAIM" 2>/dev/null || {
             rm -f "$CLAIM"
             continue
           }
-        }
-      } || continue
-
-      JOB_ID="$(basename "$CLAIM")"
-      JOB_ID="${JOB_ID%%.*}"
+        } || continue
+      }
 
       set --
       {
