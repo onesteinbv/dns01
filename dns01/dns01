@@ -146,7 +146,6 @@ wait_propagation() {
   err "Timeout after $((now - start))s waiting for challenge propagation"
 }
 
-# linear map from sha to jitter range
 map_jitter() {
   local range="$1"
   local seed="$(hostname)$$${BASHPID}${PPID}$(date +%s%N)$(head -c8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
@@ -203,7 +202,7 @@ challenge() {
           \"name\" : \"$name\",
           \"type\" : \"TXT\",
           \"ttl\"  : 600,
-          \"value\": \"$token\"
+          \"value\": $(printf '%s' "$token" | jq -R '@json')
         }]" || return $?                                          ;&
 
     wait_propagation) wait_propagation "$name" "$zone" "$token"   ;;
@@ -214,7 +213,7 @@ challenge() {
           \"name\" : \"$name\",
           \"type\" : \"TXT\",
           \"ttl\"  : 600,
-          \"value\": \"$token\"
+          \"value\": $(printf '%s' "$token" | jq -R '@json')
         }]"                                                       ;;
 
     *) err "Unknown mode: $mode"                                  ;;
