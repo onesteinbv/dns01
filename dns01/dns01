@@ -157,27 +157,32 @@ map_jitter() {
 claim_challenge() {
   (( conf[dns01_desync] )) || return 0
 
-  local zone="$1" name="$2" domain="$3" token="$4" jitter="$(map_jitter ${conf[dns01_desync]})"
+  local zone="$1" name="$2" domain="$3" token="$4"
+  local jitter="$(map_jitter ${conf[dns01_desync]})" jitter_interval=5
 
-  msg "Wait $jitter seconds ..."
-  sleep $jitter
+  msg "Jitter window: ${jitter}s, polling every ${jitter_interval}s ..."
+  while (( jitter > 0 )); do
+    sleep $(( jitter < jitter_interval ? jitter : jitter_interval ))
+    (( jitter -= jitter_interval ))
 
-  msg "Checking whether a challenge record for $domain exists ..."
+    msg "Checking whether a challenge record for $domain exists ..."
 
-  rest getj "dns/zones/$zone/records" type=TXT record_name_pattern="$name.$zone" \
-    | jq -er '.data.total > 0' > /dev/null && {
-    msg "Found an existing record for $domain"
+    rest getj "dns/zones/$zone/records" type=TXT record_name_pattern="$name.$zone" \
+      | jq -er '.data.total > 0' > /dev/null && {
+      msg "Found an existing record for $domain"
 
-    # same token, wait for winner cleanup before abort
-    local waited=0 wait_abort=30
-    while rest getj "dns/zones/$zone/records" type=TXT record_name_pattern="$name.$zone" \
-      | jq -e --arg t "$token" '.data.results[] | select(.value == $t)' > /dev/null; do
-      sleep 30
-      (( (waited += 30) > conf[dns01_timeout] + wait_abort )) && err "Timeout waiting for existing challenge cleanup"
-    done
+      # same token, wait for winner cleanup before abort
+      local waited=0 wait_abort=30
+      while rest getj "dns/zones/$zone/records" type=TXT record_name_pattern="$name.$zone" \
+        | jq -e --arg t "\"$token\"" '.data.results[] | select(.value == $t)' &> /dev/null; do
+        msg  "Waiting for winner cleanup ..."
+        sleep $wait_abort
+        (( (waited += wait_abort) > conf[dns01_timeout] + wait_abort )) && err "Timeout waiting for existing challenge cleanup"
+      done
 
-    err "Lost race, aborting"
-  }
+      err "Lost race, aborting"
+    }
+  done
 
   msg "No challenge found for $domain, claiming creation ..."
 }
