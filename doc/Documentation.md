@@ -334,21 +334,23 @@ In some multi-instance setups, there is no coordination mechanism applied on the
 
 If the DNS provider rejects multiple TXT records for the same domain, the race will be eliminated there. But if it accepts multiple TXT records for some domain, all the pods will create entries and the first propagation detection that succeeds will succeed the DNS-01 challenge.
 
-To mitigate the risk of too many probes to the same domain causing throttling at the authoritative servers, **dns01** implements a simple, stateless avoidance mechanism. When enabled, each challenge request:
+To mitigate the risk of too many probes to the same domain getting throttled by the authoritative servers, **dns01** implements a simple, stateless avoidance mechanism. When enabled, each challenge request:
 
-1. Waits a randomized jitter period before proceeding
-2. Checks whether a challenge record for the target domain already exists
-3. If a record exists with a different token, it aborts immediately
-4. If a record exists with the same token, it waits for it to disappear before aborting
-5. If no record exists for the target domain, it proceeds with creating it
+1. **Enters** a random *jitter time* before proceeding with the challenge
+2. **During** this time, it periodically checks whether a challenge record for the target domain exists
+3. If the record is found with a different token, it aborts immediately
+4. If the record is found with the same token, it waits for the record to disappear before aborting
+5. **After** the jitter time ends, and if no record was found for the target domain, it proceeds with the challenge
 
-The reason 4. behaves differently is that **dns01** clients may request the deletion of the TXT record after a detection pod returns. If a "losing" pod returns before a "winning" one, the deletion will be applied on the TXT record that is being used to solve the challenge. 
+The reason 4. behaves differently is that **dns01** clients may request the deletion of the TXT record after a detection pod returns. If a "losing" pod returns before a "winning" one, the deletion will be applied on the TXT record that is being used to solve the challenge.
 
-The jitter is computed by mixing multiple entropy sources (hostname, process IDs, nanosecond timestamp, `/dev/urandom`) through SHA256, then mapping linearly the result from the hash space to a configured window size.
+Actively polling during jitter prevents the situation where a winner gets to fully complete and delete the TXT record before a loser's jitter time ends, which would cause the challenge to restart.
+
+The jitter value is gathered from multiple entropy sources (hostname, process IDs, nanosecond timestamp, `/dev/urandom`) mapped through SHA256, and then linearly from the hash result space to a configured window size.
 
 The variable `DNS01_DESYNC` enables this mecanism and configures the jitter window. It is mapped to the configuration entry `conf[dns01_desync]` when found in the environment, and it defaults to `0` (disable collision avoidance).
 
-Higher jitter windows will statistically reduce the chance of collisions at the cost of introducing extra delays when starting the challenges. The relationship is roughly:
+Higher window values will statistically reduce the chance of collisions at the cost of introducing extra delays when starting the challenges. The relationship is roughly:
 
 | `DNS01_DESYNC` | Collision chance (3s API latency) |
 | :------------: | :-------------------------------: |
