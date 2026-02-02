@@ -157,30 +157,33 @@ claim_challenge() {
   (( conf[dns01_desync] )) || return 0
 
   local zone="$1" name="$2" domain="$3" token="$4"
-  local jitter="$(map_jitter ${conf[dns01_desync]})" jitter_interval=5
+  local jitter=$(map_jitter "${conf[dns01_desync]}") backoff=1 elapsed=0 wait
 
-  msg "Jitter window: ${jitter}s, polling every ${jitter_interval}s ..."
-  while (( jitter > 0 )); do
-    sleep $(( jitter < jitter_interval ? jitter : jitter_interval ))
-    (( jitter -= jitter_interval ))
+  msg "Jitter window: ${jitter}s"
 
-    msg "Checking whether a challenge record for $domain exists ..."
+  while (( elapsed < jitter )); do
+    (( wait = (elapsed + backoff > jitter) ? jitter - elapsed : backoff,
+       elapsed += wait ))
+    sleep $wait
+
+    msg "($elapsed/${jitter}s) Checking whether a challenge record for $domain exists ..."
 
     rest getj "dns/zones/$zone/records" type=TXT record_name_pattern="$name.$zone" \
       | jq -er '.data.total > 0' > /dev/null && {
       msg "Found an existing record for $domain"
 
-      # same token, wait for winner cleanup before abort
       local waited=0 wait_abort=30
       while rest getj "dns/zones/$zone/records" type=TXT record_name_pattern="$name.$zone" \
         | jq -e --arg t "\"$token\"" '.data.results[] | select(.value == $t)' &> /dev/null; do
-        msg  "Waiting for winner cleanup ..."
+        msg "Waiting for winner cleanup ..."
         sleep $wait_abort
-        (( (waited += wait_abort) > conf[dns01_timeout] + wait_abort )) && err "Timeout waiting for existing challenge cleanup"
+        (( (waited += wait_abort) > conf[dns01_timeout] + wait_abort )) && err "timeout waiting for existing challenge cleanup"
       done
 
-      err "Lost race, aborting"
+      err "lost race, aborting"
     }
+
+    (( backoff = backoff < conf[dns01_desync] ? backoff * 2 : backoff ))
   done
 
   msg "No challenge found for $domain, claiming creation ..."
