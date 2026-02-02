@@ -80,7 +80,7 @@ wait_propagation() {
   while (( (extend_streak=${#test[@]} == ${#nameservers[@]}), (now=$(date +%s)) - start < timeout )); do
     for i in "${!test[@]}"; do
       echo -n "${test[$i]}" >&2
-      if dig +short TXT "$name.$zone" @"${test[$i]}" | grep -Fq "$token"; then
+      if dig +short TXT "$name.$zone" @"${test[$i]}" | grep -Fq -- "$token"; then
         echo -n "✅ " >&2
 
         # lego-style success
