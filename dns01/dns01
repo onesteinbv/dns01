@@ -24,6 +24,10 @@ conf[dns01_streak_threshold]=10
 conf[dns01_streak_penalty]=0
 conf[dns01_streak_mod]=4
 
+# challenge collision controls for some HA setups
+# see https://doc.traefik.io/traefik/reference/install-configuration/tls/certificate-resolvers/acme/#letsencrypt-support-with-the-ingress-provider
+conf[dns01_desync]=0
+
 source "${script[dir]}/common"
 
 rest() {
@@ -71,18 +75,18 @@ wait_propagation() {
   done
   (( ${#nameservers[@]} )) || err "Couldn't find authoritative nameservers for $zone - aborting"
 
-  msg "Waiting for TXT propagation ($name.$zone)"
+  msg "Waiting for challenge propagation ($name.$zone)"
   local test=( "${nameservers[@]}" ) extend_streak
   while (( (extend_streak=${#test[@]} == ${#nameservers[@]}), (now=$(date +%s)) - start < timeout )); do
     for i in "${!test[@]}"; do
       echo -n "${test[$i]}" >&2
-      if dig +short TXT "$name.$zone" @"${test[$i]}" | grep -Fq "$token"; then
+      if dig +short TXT "$name.$zone" @"${test[$i]}" | grep -Fq -- "$token"; then
         echo -n "✅ " >&2
 
         # lego-style success
         ${conf[dns01_streak]} || {
           echo >&2
-          msg "Token propagated in $((now - start))s to all authoritative nameservers"
+          msg "Challenge propagated in $((now - start))s to all authoritative nameservers"
           return 0
         }
 
@@ -128,7 +132,7 @@ wait_propagation() {
 
       # native-style success
       (( streak_p >= 100 && stable_p >= 100 || streak_p >= 200 )) && {
-        msg "Token propagated in $((now - start))s to all authoritative nameservers"
+        msg "Token propagated in $(fmtTime $((now - start))) to all authoritative nameservers"
         return 0
       }
 
@@ -139,38 +143,80 @@ wait_propagation() {
     sleep $backoff
   done
 
-  err "Timeout after $((now - start))s waiting for DNS propagation"
+  err "Timeout after $((now - start))s waiting for challenge propagation"
+}
+
+map_jitter() {
+  local range="$1"
+  local seed="$(hostname)$$${BASHPID}${PPID}$(date +%s%N)$(head -c8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  local hash_val=$((0x$(printf '%s' "$seed" | sha256sum | head -c8)))
+  echo $(( hash_val * range / 0x100000000 ))
+}
+
+claim_challenge() {
+  (( conf[dns01_desync] )) || return 0
+
+  local zone="$1" name="$2" domain="$3" token="$4"
+  local jitter=$(map_jitter "${conf[dns01_desync]}") backoff=1 elapsed=0 wait
+
+  msg "Jitter window: ${jitter}s"
+
+  while (( elapsed < jitter )); do
+    (( wait = (elapsed + backoff > jitter) ? jitter - elapsed : backoff,
+       elapsed += wait ))
+    sleep $wait
+
+    msg "($elapsed/${jitter}s) Checking whether a challenge record for $domain exists ..."
+
+    rest getj "dns/zones/$zone/records" type=TXT record_name_pattern="$name.$zone" \
+      | jq -er '.data.total > 0' > /dev/null && {
+      msg "Found an existing record for $domain"
+
+      local waited=0 wait_abort=30
+      while rest getj "dns/zones/$zone/records" type=TXT record_name_pattern="$name.$zone" \
+        | jq -e --arg t "\"$token\"" '.data.results[] | select(.value == $t)' &> /dev/null; do
+        msg "Waiting for winner cleanup ..."
+        sleep $wait_abort
+        (( (waited += wait_abort) > conf[dns01_timeout] + wait_abort )) && err "timeout waiting for existing challenge cleanup"
+      done
+
+      err "lost race, aborting"
+    }
+
+    (( backoff = backoff < conf[dns01_desync] ? backoff * 2 : backoff ))
+  done
+
+  msg "No challenge found for $domain, claiming creation ..."
 }
 
 challenge() {
   local mode="$1" domain="$2" token="$3" wildcard fq zone host
   read -r wildcard fq zone host< <(parse_domain "$domain") || err "Invalid domain syntax: $domain"
 
-  local id
+  local id name="_acme-challenge${host:+.$host}"
   id=$(rest getj "dns/zones/$zone" | jq -c '.data.id') || return $?
-  local name="_acme-challenge${host:+.$host}"
 
   case $mode in
     add|present)
+      claim_challenge "$zone" "$name" "$domain" "$token"
+
       rest put dns/zones/"$zone" id="$id" name="$name" \
         records.add="[{
           \"name\" : \"$name\",
           \"type\" : \"TXT\",
           \"ttl\"  : 600,
-          \"value\": \"${token}\"
+          \"value\": $(printf '%s' "$token" | jq -R '@json')
         }]" || return $?                                          ;&
 
     wait_propagation) wait_propagation "$name" "$zone" "$token"   ;;
 
     del|cleanup)
-      local quoted=$(printf '%s' "$token" | jq -R '@json')
-
       rest put dns/zones/"$zone" id="$id" \
         records.remove="[{
           \"name\" : \"$name\",
           \"type\" : \"TXT\",
           \"ttl\"  : 600,
-          \"value\": $quoted
+          \"value\": $(printf '%s' "$token" | jq -R '@json')
         }]"                                                       ;;
 
     *) err "Unknown mode: $mode"                                  ;;
@@ -186,16 +232,16 @@ traefik_hook() {
   [[ "$domain" =~ ^_acme-challenge\.(.*)\.$ ]] && domain="${BASH_REMATCH[1]}"
 
   case "${conf[dns01_native]}" in
-    fallback) "${conf[@]@A}" && declare -gA native_conf="${_#*=}"                     ;&
+    fallback) arrCpy conf native_conf                   ;&
 
     false)
       conf[dns01_timeout]="$EXEC_PROPAGATION_TIMEOUT"
       conf[dns01_backoff]="$EXEC_POLLING_INTERVAL"
       conf[dns01_backoff_min]="$EXEC_POLLING_INTERVAL"
       conf[dns01_backoff_max]="$EXEC_POLLING_INTERVAL"
-      conf[dns01_streak]=false                                                        ;;
+      conf[dns01_streak]=false                          ;;
 
-    true) true                                                                        ;;
+    true) true                                          ;;
 
     *)
       [[ -v DNS01_TIMEOUT ]] || {
@@ -220,7 +266,7 @@ traefik_hook() {
   challenge "$mode" "$domain" "$token" || {
     [[ "${conf[dns01_native]}" == 'fallback' ]] && {
       msg "Basic propagation detection failed, trying native streak mode ..."
-      "${native_conf[@]@A}" && declare -A conf="${_#*=}"
+      arrCpy -f native_conf conf
       conf[dns01_streak]=true
       challenge wait_propagation "$domain" "$token"
     }
@@ -233,7 +279,7 @@ help() {
 
 go() {
   # map environment  -----------------------------------------------------------
-  env2conf DNS01_ "^[0-9]+$" {timeout,streak{,_{threshold,penalty,mod}},backoff{,_{min,max}}}
+  env2conf DNS01_ "^[0-9]+$" {timeout,desync,streak{,_{threshold,penalty,mod}},backoff{,_{min,max}}}
   env2conf DNS01_ "^(true|false)$" streak
   env2conf DNS01_ "^(true|false|fallback)$" native
 

@@ -12,7 +12,6 @@ LABEL org.opencontainers.image.documentation="https://github.com/onesteinbv/dns0
 LABEL org.opencontainers.image.vendor="Onestein B.V."
 LABEL org.opencontainers.image.licenses="LGPL-3.0-or-later"
 
-
 # Filled dynamically at build time
 ARG VERSION="dev"
 ARG REVISION="unknown"

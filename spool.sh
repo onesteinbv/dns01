@@ -8,16 +8,26 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SPOOL_JOB="${SPOOL_JOB:-/bin/false}"
 SPOOL_DIR="${SPOOL_DIR:-$SCRIPT_DIR/spool}"
 SPOOL_TIMEOUT="${SPOOL_TIMEOUT:-1500}"
+SPOOL_WORKERS="${SPOOL_WORKERS:-1}"
 
 # synchronous spool client
 send_job() {
-  JOB_ID="$(date +%s)-$$"
+  TMP="$(mktemp -p "$SPOOL_DIR" "$$-XXXXXX")" || return 1
+  JOB_ID="$(basename "$TMP")"
+  rm -f "$TMP"
+  REQUEST="$SPOOL_DIR/$JOB_ID.request"
   {
     for ARG in "$@"; do
       printf '%s' "$ARG" | base64 | tr -d '\n'
       echo
     done
-  } > "$SPOOL_DIR/$JOB_ID.request"
+  } > "${REQUEST}_tmp" && {
+    mv "${REQUEST}_tmp" "$REQUEST" || {
+      echo "[spool] error while writing request: $REQUEST"
+      rm -f "${REQUEST}_tmp" "$REQUEST"
+      return 1
+    }
+  }
 
   RESPONSE="$SPOOL_DIR/$JOB_ID.response"
   i="$SPOOL_TIMEOUT"
@@ -26,8 +36,9 @@ send_job() {
       echo "[spool] timeout waiting for $RESPONSE" >&2
       return 1
     fi
-    sleep 1
     i=$((i - 1))
+
+    sleep 1
   done
 
   RETVAL=$(cat "$RESPONSE")
@@ -44,21 +55,34 @@ daemon() {
     [ -e "$1" ] || { sleep 1; continue; }
 
     for REQUEST in "$SPOOL_DIR"/*.request; do
-      [ -e "$REQUEST" ] || continue
-
-      export JOB_ID="$(basename "$REQUEST" .request)"
+      [ -e "$REQUEST" ] && {
+        export JOB_ID="$(basename "$REQUEST" .request)"
+        CLAIM="$(mktemp -p "$SPOOL_DIR" "claimed.$JOB_ID-XXXXXX")" && {
+          mv "$REQUEST" "$CLAIM" 2>/dev/null || {
+            rm -f "$CLAIM"
+            continue
+          }
+        } || continue
+      }
 
       set --
       {
         while IFS= read -r ARG; do
           set -- "$@" "$(printf '%s' "$ARG" | base64 -d)"
         done
-      } < "$REQUEST"
+      } < "$CLAIM"
 
       echo "[spool] dispatching asynchronous job id=$JOB_ID (command: $SPOOL_JOB $*)"
 
-      ( "$SPOOL_JOB" "$@"; echo "$?" > "$SPOOL_DIR/$JOB_ID.response") &
-      rm -f "$REQUEST"
+      (
+        RESPONSE="$SPOOL_DIR/$JOB_ID.response"
+        "$SPOOL_JOB" "$@"
+        echo $? > "${RESPONSE}_$$" && {
+          mv "${RESPONSE}_$$" "$RESPONSE" || rm -f "${RESPONSE}_$$"
+        }
+      ) &
+
+      rm -f "$CLAIM"
     done
   done
 }
@@ -93,7 +117,11 @@ go() {
     exit 1
   fi
 
-  if [ "$COMMAND" = "daemon" ]; then daemon
+  if [ "$COMMAND" = "daemon" ]; then
+    for _ in $(seq 1 "$SPOOL_WORKERS"); do
+     daemon &
+    done
+    wait
   else send_job "$COMMAND" "$@"
   fi
 }

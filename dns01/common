@@ -20,10 +20,133 @@ hint[http81]='Wrong HTTP verb / endpoint'
 hint[http98]='Check that object belongs to your account'
 hint[http99]='Nothing matched the filter'
 
-# boilerplate helper
-# regex match prefixed env vars, copy to conf[] entries
+# Copy arrays
+#
+# arrCpy [-f] src dst
+#
+# src must be a numeric or associative array.
+#
+# dst can be:
+#
+# - unset, in which case it will be declared globally with the same kind and
+#   contents as src
+#
+# - an array of the same kind as src, in which case its contents will be
+#   replaced by those of src
+#
+# - an array of different kind, or a scalar, in which case it will be unset
+#   and (re)declared globally with the same kind and contents as src
+#
+# Attempting to overwrite an existing variables without -f will trigger an
+# error, unless both src and dst are equal.
+#
+# Returns: 1 on error, 0 otherwise
+arrCpy() {
+  local force=false
+  [[ "$1" == "-f" ]] && { force=true; shift; }
+
+  (( $# == 2 )) || {
+    err "$0: line ${BASH_LINENO[0]}: ${FUNCNAME[0]}: wrong argument count"
+    return 1
+  }
+
+  local src_type= src_dec="$(declare -p "$1" 2>/dev/null)"
+  [[ -n "$src_dec" && "$src_dec" =~ ^declare\ -([aA]).* ]] || {
+    err "$0: line ${BASH_LINENO[0]}: ${FUNCNAME[0]}: source array '$1' not found"
+    return 1
+  }
+  src_type="${BASH_REMATCH[1]}"
+
+  [[ "$1" == "$2" ]] && return 0
+
+  local dst_type= dst_dec="$(declare -p "$2" 2>/dev/null)"
+  [[ -n "$dst_dec" ]] && {
+    $force || {
+      err "$0: line ${BASH_LINENO[0]}: ${FUNCNAME[0]}: destination '$2' exists, use -f to overwrite"
+      return 1
+    }
+
+    [[ "$dst_dec" =~ ^declare\ -([aA]).* ]] && dst_type="${BASH_REMATCH[1]}"
+  }
+
+  if [[ "$dst_type" == "$src_type" ]]; then
+    local -n src=$1 dst=$2
+    local k
+    for k in "${!dst[@]}"; do unset 'dst[$k]'; done
+    for k in "${!src[@]}"; do dst["$k"]=${src["$k"]}; done
+  else
+    unset -v "$2"
+    declare -g"${src_type}" "$2"="${src_dec#*=}"
+  fi
+}
+
+# Format a positive number of seconds into a human-readable string
+#
+# fmtTime SECONDS
+fmtTime() {
+  (( $1 < 0 )) && err "$0: line ${BASH_LINENO[0]}: ${FUNCNAME[0]}: invalid time '$1'"
+  (( $1 == 0 )) && { printf '0 seconds\n'; return; }
+
+  local d h m s
+  (( d=$1/60/60/24, h=$1/60/60%24, m=$1/60%60, s=$1%60 ))
+
+  (( $d )) && {
+    printf '%d day' $d
+    (( $d > 1 )) && printf 's'
+  }
+
+  (( $h )) && {
+    (( $d )) && {
+      if (( $m || $s )); then printf ', '
+      else printf ' and '
+      fi
+    }
+
+    printf '%d hour' $h
+    (( $h > 1 )) && printf 's'
+  }
+
+  (( $m )) && {
+    (( $d || $h )) && {
+      if (( $s )); then printf ', '
+      else printf ' and '
+      fi
+    }
+    printf '%d minute' $m
+    (( $m > 1 )) && printf 's'
+  }
+
+  (( $s )) && {
+    (( $d || $h || $m )) && printf ' and '
+    printf '%d second' $s
+    (( $s > 1 )) && printf 's'
+  }
+
+  printf '\n'
+}
+
+# Boilerplate helper: match env vars and copy to conf[] entries
+#
+# env2conf <prefix> <regex> <<conf entry> ...>
+#
+# env2conf will search for environment variables:
+#
+# - whose name starts with the prefix and follows with a conf entry name
+# - whose value matches the regular expression
+#
+# The values of the matching variables will be copied under the associated entry
+# in conf[]. Environment variable names are always looked up in uppercase, while
+# conf[] entries are stored in lowercase with the prefix preserved.
+#
+# Example:
+#
+# env2conf myprefix_ "^valid.*$" entry1 entry2
+#
+# This will look for MYPREFIX_ENTRY1 and MYPREFIX_ENTRY2, and if their values
+# start with "valid", they will be copied to conf[myprefix_entry1] and
+# conf[myprefix_entry2].
 env2conf(){
-  local v prefix="$1" rx="$2"
+  local v prefix="${1^^}" rx="$2"
   shift 2
 
   for v in "$@"; do
