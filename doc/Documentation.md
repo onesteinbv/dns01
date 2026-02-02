@@ -336,11 +336,11 @@ If the DNS provider rejects multiple TXT records for the same domain, the race w
 
 To mitigate the risk of too many probes to the same domain getting throttled by the authoritative servers, **dns01** implements a simple, stateless avoidance mechanism. When enabled, each challenge request:
 
-1. **Enters** a random *jitter time* before proceeding with the challenge
-2. **During** this time, it periodically checks whether a challenge record for the target domain exists
+1. **Enters** a random *jitter window* before proceeding with the challenge
+2. **During** this window, it periodically checks whether a challenge record for the target domain exists
 3. If the record is found with a different token, it aborts immediately
 4. If the record is found with the same token, it waits for the record to disappear before aborting
-5. **After** the jitter time ends, and if no record was found for the target domain, it proceeds with the challenge
+5. **After** the jitter window ends, and if no record was found for the target domain, it proceeds with the challenge
 
 The reason 4. behaves differently is that **dns01** clients may request the deletion of the TXT record after a detection pod returns. If a "losing" pod returns before a "winning" one, the deletion will be applied on the TXT record that is being used to solve the challenge.
 
@@ -599,19 +599,17 @@ certificatesResolvers:
 > -  `/data` is a persistent volume for the certificate store. Please refer to the Traefik [documentation on ACME](https://doc.traefik.io/traefik/reference/install-configuration/tls/certificate-resolvers/acme/) for more information.
 > - When using the **dns01** native propagation checks (`DNS01_NATIVE=true`), disable the lego checks on the certificate resolver with `disablePropagationCheck: true`. See [Usage](#usage-1) and [Notes](#adaptive-propagation-detection-the-native-mode) for details.
 
-### High availability considerations
+### HA setups with Traefik
 
-The [Traefik documentation](https://doc.traefik.io/traefik/reference/install-configuration/tls/certificate-resolvers/acme/#letsencrypt-support-with-the-ingress-provider) notes that running multiple Traefik instances with ACME has limitations. Each replica maintains its own view of certificate state, which can cause redundant challenge attempts for the same domain.
+The [Traefik documentation](https://doc.traefik.io/traefik/reference/install-configuration/tls/certificate-resolvers/acme/#letsencrypt-support-with-the-ingress-provider) notes that running multiple Traefik instances with ACME has some limitations, most notably the lack of HA arbitration: each replica maintains its own view of certificate state, which can cause redundant challenge attempts for the same domain.
 
-When using **dns01** with multi-replica Traefik deployments:
+When using **dns01** with multi-replica Traefik deployments, the following advice applies:
 
-1. **Enable collision avoidance** by setting `DNS01_DESYNC` to a value between 60 and 120 seconds. This adds randomized jitter to challenge requests, reducing the likelihood of simultaneous record creation attempts.
+- **Enable collision avoidance** via `DNS01_DESYNC`. This adds randomized jitter to challenge requests, reducing the likelihood of simultaneous record creation attempts.
+- **Use shared spool directories** to dispatch multiple ACME requests to **dns01** spoolers. You can use shared volumes with sidecar containers or even shared persistent volumes with dedicated pods to have different spool topologies. 
+- Optionally **multiple spool workers** via `SPOOL_WORKERS` can also help if challenge throughput is a concern.
 
-2. **Use a shared spool directory** mounted as a `ReadWriteMany` volume (or equivalent) so that all Traefik pods dispatch to the same **dns01** sidecar pool.
-
-3. **Consider multiple spool workers** via `SPOOL_WORKERS` if challenge throughput is a concern. The atomic claim mechanism ensures safe parallel processing.
-
-Example sidecar configuration with collision avoidance and multiple workers enabled:
+Example sidecar with collision avoidance and multiple workers:
 
 ```yaml
 additionalContainers:
@@ -628,6 +626,6 @@ additionalContainers:
     - name: DNS01_DESYNC
       value: "60"
     - name: SPOOL_WORKERS
-      value: "2"
+      value: "3"
 ```
 

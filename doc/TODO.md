@@ -48,6 +48,7 @@
 - sanitize logs, redact any sensitive information such as authorization headers
 - send relevant env/extra config from traefik via spool
 - spooler: handle cleanup, confirmations, better info on send_job, extend failure modes
+- add janitor process using OP journal to remove stale challenges
 
 - improve HTTP error and status messages (preparse at enc or helper in common)
 - macro templates + function for record boilerplate
