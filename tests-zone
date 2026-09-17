@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+
+# SPDX-License-Identifier: LGPL-3.0-or-later
+# Copyright (c) 2025 Onestein B.V.
+
+# tests-zone ─ regression tests for the zone dump
+# Requires: bash 4+, jq, ./dns01/zone and ./dns01/rest.
+#
+# The API is stubbed: `get` is replaced, so no request leaves the machine.
+# Each case runs in a subshell, because err() exits.
+
+set -o pipefail
+
+source ./dns01/zone main
+
+pass() { printf '\e[32m✔ %s\e[0m\n' "$1"; }
+fail() { printf '\e[31m✘ %s\e[0m\n' "$1"; exit 1; }
+
+# page <total> <from> <count>: a listing answer with <count> made-up records
+page() {
+  local total=$1 from=$2 count=$3 i
+  printf '{"data":{"total":%d,"results":[' "$total"
+  for (( i=0; i < count; i++ )); do
+    (( i )) && printf ','
+    printf '{"id":%d,"name":"r%d.example.com","type":"A","value":"192.0.2.1"}' "$(( from + i ))" "$(( from + i ))"
+  done
+  printf ']}}'
+}
+
+# 250 records over three pages of 100, the control among them
+whole_zone() {
+  case "$2" in
+    limit=100) case "$3" in
+                 offset=0)   page 250 0 100   ;;
+                 offset=100) page 250 100 100 ;;
+                 offset=200) page 250 200 50  ;;
+               esac ;;
+  esac
+}
+
+# ------------------------------------------------------------
+# assert_ok <desc> <stub fn> <control> <expected line count>
+assert_ok() {
+  local desc=$1 stub=$2 control=$3 want=$4 out rc lines
+  get() { $stub "$@"; }
+  out="$(dump example.com "$control" 2>/dev/null)"; rc=$?
+  lines="$(wc -l <<< "$out")"
+  (( rc == 0 )) || fail "$desc (exited $rc)"
+  (( lines == want )) || fail "$desc (got $lines records, expected $want)"
+  jq -ce . <<< "$out" > /dev/null || fail "$desc (output is not one JSON record per line)"
+  pass "$desc"
+}
+
+# assert_fails <desc> <stub fn> <control>
+assert_fails() {
+  local desc=$1 stub=$2 control=$3 out rc
+  get() { $stub "$@"; }
+  out="$(dump example.com "$control" 2>/dev/null)"; rc=$?
+  (( rc != 0 )) || fail "$desc (exited 0, it should have failed)"
+  [[ -z $out ]] || fail "$desc (printed records although it failed)"
+  pass "$desc"
+}
+
+# ============================================================
+#                    TEST CASES
+# ============================================================
+
+# 1. every page read, control seen
+assert_ok "paged listing, control present" whole_zone r7.example.com 250
+
+# 2. the control is not in the zone: an answer that cannot see what it should
+assert_fails "control missing" whole_zone control.example.com
+
+# 3. the pages are readable and the control is in them, but they add up to
+#    fewer records than the API says the zone has
+short_pages() {
+  case "$3" in
+    offset=0)   page 250 0 100  ;;
+    offset=100) page 250 100 20 ;;
+    offset=200) page 250 200 20 ;;
+  esac
+}
+assert_fails "fewer records than the reported total" short_pages r7.example.com
+
+# 4. the oversized-limit trap: empty result set with total 0 looks like an
+#    empty zone, and must not read as a successful dump
+empty_zone() { page 0 0 0; }
+assert_fails "empty result set" empty_zone r7.example.com
+
+# 5. an answer without a total is not an empty zone either
+no_total() { printf '{"data":{"results":[]}}'; }
+assert_fails "listing without a total" no_total r7.example.com
+
+# 6. not JSON at all
+garbage() { printf 'not json'; }
+assert_fails "unreadable answer" garbage r7.example.com
+
+echo -e "\nAll tests passed!"

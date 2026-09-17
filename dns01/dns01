@@ -174,7 +174,7 @@ claim_challenge() {
 
       local waited=0 wait_abort=30
       while rest getj "dns/zones/$zone/records" type=TXT record_name_pattern="$name.$zone" \
-        | jq -e --arg t "\"$token\"" '.data.results[] | select(.value == $t)' &> /dev/null; do
+        | jq -e --arg t "$(printf '%s' "$token" | jq -R '@json')" '.data.results[] | select(.value == $t)' &> /dev/null; do
         msg "Waiting for winner cleanup ..."
         sleep $wait_abort
         (( (waited += wait_abort) > conf[dns01_timeout] + wait_abort )) && err "timeout waiting for existing challenge cleanup"
