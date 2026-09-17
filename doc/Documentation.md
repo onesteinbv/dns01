@@ -123,6 +123,53 @@ The `--raw` argument can be passed first to force that format, essentially disab
 
 
 
+## `dns01/zone`
+
+Reads a zone's records through the provider API, and proves the reading worked.
+
+### Requirements
+
+- jq
+- curl
+- the `dns01/common` and `dns01/rest` scripts
+
+### Configuration
+
+None of its own: it sources `rest`, and so uses the same API configuration and
+the `REST_USERNAME` / `REST_PASSWORD` variables.
+
+### Usage
+
+#### `zone dump <zone> <control record name> [page size]`
+
+Prints every record of the zone, one compact JSON object per line, in the order
+the API returns them.
+
+The listing is paged, `100` records per page by default. An oversized page size
+is rejected by Openprovider with an **empty result set**, which reads exactly
+like "this zone has no records", so the page size stays small and the answers
+are counted rather than trusted.
+
+Nothing is printed unless both of these hold:
+
+- the number of records fetched equals the `total` the listing reports, and a
+  page shorter than the page size ends the listing
+- the **control record** is among the records fetched
+
+The control is a record the caller knows exists, looked up through the same
+listing. Without it, "nothing matched" cannot be told apart from a lookup that
+returned nothing, which is how a zone check can report success while computing
+nothing at all.
+
+```bash
+export REST_USERNAME=... REST_PASSWORD=...
+./dns01/zone dump example.com www.example.com
+```
+
+Exit codes follow `common`: `20` for an unreadable answer, `40` when the
+listing is incomplete or the control is missing.
+
+
 ## `dns01/dns01`
 A script to assist with DNS-01 ACME challenges.
 

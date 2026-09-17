@@ -48,7 +48,7 @@ send_job() {
 
 # watch the spool, handle job dispatching and request/response traffic
 daemon() {
-  echo "[spool] daemon started from $SCRIPT_DIR, watching spool in $SPOOL_DIR"
+  echo "[spool] daemon started from $SCRIPT_DIR, watching $SPOOL_DIR"
 
   while :; do
     set -- "$SPOOL_DIR"/*.request
