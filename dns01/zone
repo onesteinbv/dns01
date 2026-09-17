@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+
+# SPDX-License-Identifier: LGPL-3.0-or-later
+# Copyright (c) 2025 Onestein B.V.
+
+declare -A script conf
+
+script[path]="$(readlink -f "${BASH_SOURCE[0]}")"
+script[name]="${script[path]##*/}"
+script[dir]="${script[path]%/*}"
+
+# rest brings the request verbs and the Openprovider endpoint configuration.
+# It sets script[] for itself, so ours is restored afterwards.
+source "${script[dir]}/rest" go
+script[path]="$(readlink -f "${BASH_SOURCE[0]}")"
+script[name]="${script[path]##*/}"
+script[dir]="${script[path]%/*}"
+
+conf[zone_page]=100
+
+# Read every record of a zone, and prove the reading worked
+#
+# zone dump <zone> <control record name> [page size]
+#
+# Prints one record per line as compact JSON, in the order the API returns
+# them. The listing is paged: an oversized page size is rejected by the API
+# with an empty result set, which is indistinguishable from "this zone has no
+# records", so the page size stays small and every page is counted.
+#
+# Two things must hold before the output is believed, because an incomplete
+# answer looks exactly like a smaller zone:
+#
+# - the number of records fetched equals the `total` the API reports
+# - the control record is among them
+#
+# The control is a record the caller knows exists, seen through this same
+# listing. Without it, "nothing matched" cannot be told apart from a query
+# that returned nothing, which is how a zone check reports success while
+# computing nothing at all.
+#
+# Returns: non-zero on any of those, printing nothing
+dump() {
+  local zone="$1" control="$2" page="${3:-${conf[zone_page]}}"
+
+  [[ -n $zone && -n $control ]] || err fail "usage: ${script[name]} dump <zone> <control record name> [page size]"
+  [[ $page =~ ^[0-9]+$ ]] && (( page > 0 )) || err fail "page size must be a positive number: '$page'"
+
+  local records total=0 got=0 offset=0 response found
+  records="$(mktemp)" || err fail "could not create a temporary file"
+  trap 'rm -f "$records"' RETURN
+
+  while :; do
+    response="$(get "dns/zones/$zone/records" limit="$page" offset="$offset")" || return $?
+
+    total="$(jq -er '.data.total | numbers' <<< "$response")" \
+      || err parse "no total in the listing of $zone: an unreadable answer is not an empty zone"
+
+    # not -e: a page with no results is not an unreadable answer, and the
+    # count below is what decides whether the listing was complete
+    jq -c '.data.results[]?' <<< "$response" >> "$records" \
+      || err parse "could not read the records of $zone"
+
+    found="$(jq -e '.data.results | length' <<< "$response")" \
+      || err parse "could not count the records in a page of $zone"
+
+    got="$(wc -l < "$records")"
+    # a page shorter than asked for is the last one, whatever `total` says: the
+    # comparison below is then what reports the zone as incompletely read
+    (( got >= total || found < page )) && break
+    (( offset += page ))
+  done
+
+  (( got == total )) \
+    || err api "fetched $got of the $total records of $zone"
+
+  jq -e --arg n "$control" 'select(.name == $n)' "$records" > /dev/null \
+    || err api "control record '$control' is not in the $total records fetched from $zone: this listing proves nothing"
+
+  msg "$zone: $total records, control '$control' seen"
+  cat "$records"
+}
+
+main() {
+  while [[ "$1" == @(${FUNCNAME[0]}|req|comma_items|go) ]]; do shift; done
+  [[ $(type -t "$1" 2> /dev/null) == 'function' ]] && "$@"
+}
+
+main "$@"

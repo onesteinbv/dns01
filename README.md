@@ -4,9 +4,9 @@ A toolkit to handle DNS-01 ACME challenges with a focus on Traefik (lego), Openp
 
 ## DNS propagation improvements
 
-- adaptive backoff  
-- positive streak detection across authoritative DNS servers  
-- stabilization window  
+- adaptive backoff
+- positive streak detection across authoritative DNS servers
+- stabilization window
 - fallback mode for Traefik
 
 ## Standalone operation
@@ -19,8 +19,9 @@ A toolkit to handle DNS-01 ACME challenges with a focus on Traefik (lego), Openp
 
 ## Reusable components
 
-- lightweight REST client with CLI support  
-- portable file-based spooler for cross-container work  
+- lightweight REST client with CLI support
+- portable file-based spooler for cross-container work
+- verified zone listing (paged, counted, control record required)
 
 ## Docker / K8S deployment
 
