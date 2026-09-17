@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 # Copyright (c) 2025 Onestein B.V.
 
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 
 # OCI image metadata
 LABEL org.opencontainers.image.title="dns01"

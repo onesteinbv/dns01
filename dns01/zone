@@ -73,7 +73,9 @@ dump() {
   (( got == total )) \
     || err api "fetched $got of the $total records of $zone"
 
-  jq -e --arg n "$control" 'select(.name == $n)' "$records" > /dev/null \
+  # no jq -e here: in jq 1.6 (the image's version) -e reports "no output" when
+  # the last input produces none, even if an earlier one matched
+  [[ -n "$(jq -c --arg n "$control" 'select(.name == $n)' "$records" | head -1)" ]] \
     || err api "control record '$control' is not in the $total records fetched from $zone: this listing proves nothing"
 
   msg "$zone: $total records, control '$control' seen"
