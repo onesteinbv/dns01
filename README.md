@@ -21,6 +21,7 @@ A toolkit to handle DNS-01 ACME challenges with a focus on Traefik (lego), Openp
 
 - lightweight REST client with CLI support  
 - portable file-based spooler for cross-container work  
+- verified zone listing (paged, counted, control record required)  
 
 ## Docker / K8S deployment
 
